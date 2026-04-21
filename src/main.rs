@@ -33,5 +33,12 @@ fn main() -> Result<()> {
             s
         }
     };
-    Ok(())
+
+    let theme = match cli.theme.as_str() {
+        "light" => render::theme::Theme::light(),
+        _ => render::theme::Theme::dark(),
+    };
+
+    let mut viewer = viewer::Viewer::new(content, theme)?;
+    viewer.run()
 }
