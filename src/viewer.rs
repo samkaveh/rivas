@@ -8,6 +8,7 @@ use std::io::{Stdout, stdout};
 use std::time::Duration;
 
 use crate::document::parser::parse_markdown;
+use crate::output::capabilities::TermCaps;
 use crate::output::kitty::KittyWriter;
 use crate::render::{layout::LayoutEngine, paint::pain_document, theme::Theme};
 
@@ -15,6 +16,7 @@ pub struct Viewer {
     content: String,
     scroll_y: f32,
     total_doc_height: f32,
+    caps: TermCaps,
     theme: Theme,
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -24,11 +26,12 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    pub fn new(content: String, theme: Theme) -> Result<Self> {
+    pub fn new(content: String, caps: TermCaps, theme: Theme) -> Result<Self> {
         Ok(Self {
             content,
             scroll_y: 0.0,
             total_doc_height: 0.0,
+            caps,
             theme,
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
@@ -68,9 +71,10 @@ impl Viewer {
     }
 
     fn render(&mut self) -> Result<()> {
-        let (w, h) = (100.0, 100.0);
+        let (w, h) = self.caps.area_pixels(self.caps.cols, self.caps.rows);
+        println!("{w},{h}");
         let doc = parse_markdown(&self.content);
-
+        println!("{:?}", doc.blocks);
         let mut engine = LayoutEngine::new(&mut self.font_system, &self.theme, w as f32);
         let layout = engine.layout_all(&doc.blocks);
 
@@ -99,7 +103,8 @@ impl Viewer {
 
         let id = self.kitty.alloc_id();
         self.kitty.move_cursor(0, 0)?;
-        self.kitty.display_png(&png, id, None, None)?;
+        self.kitty
+            .display_png(&png, id, Some(self.caps.cols), Some(self.caps.rows))?;
         self.current_image_id = Some(id);
         Ok(())
     }

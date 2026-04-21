@@ -1,1 +1,3 @@
-A markdown view and edit tool for the command line.
+# Rivas☺️
+
+A markdown view and edit tool for the command line. ☺️​

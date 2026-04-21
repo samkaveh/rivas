@@ -34,11 +34,16 @@ fn main() -> Result<()> {
         }
     };
 
+    let caps = output::capabilities::TermCaps::detect()?;
+    if !caps.has_kitty_graphics {
+        anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
+    }
+
     let theme = match cli.theme.as_str() {
         "light" => render::theme::Theme::light(),
         _ => render::theme::Theme::dark(),
     };
 
-    let mut viewer = viewer::Viewer::new(content, theme)?;
+    let mut viewer = viewer::Viewer::new(content, caps, theme)?;
     viewer.run()
 }

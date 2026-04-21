@@ -94,6 +94,7 @@ fn paint_buffer(
                     paint_mask(pixmap, &image, gx, gy, color, pixmap_w, pixmap_w);
                 }
                 SwashContent::Color => {
+                    println!("{:?}", image.content);
                     // Pre-render color glyph (emoji)
                     paint_color_glyph(pixmap, &image, gx, gy, pixmap_w, pixmap_h);
                 }
