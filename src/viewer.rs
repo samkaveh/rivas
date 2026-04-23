@@ -2,9 +2,10 @@ use anyhow::{Ok, Result};
 use cosmic_text::{FontSystem, SwashCache};
 use crossterm::ExecutableCommand;
 use crossterm::cursor;
-use crossterm::event::{self};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use std::io::{Stdout, stdout};
+use std::time::Duration;
 
 use crate::document::parser::parse_markdown;
 use crate::output::capabilities::TermCaps;
@@ -64,9 +65,57 @@ impl Viewer {
                 self.render()?;
                 self.needs_redraw = false;
             }
+
+            if event::poll(Duration::from_millis(50))? {
+                match event::read()? {
+                    Event::Key(k) => {
+                        if k.modifiers.contains(KeyModifiers::CONTROL)
+                            && k.code == KeyCode::Char('c')
+                        {
+                            break;
+                        }
+                        match k.code {
+                            KeyCode::Char('q') | KeyCode::Esc => break,
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                self.scroll(60.0);
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                self.scroll(-60.0);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Event::Mouse(m) => match m.kind {
+                        MouseEventKind::ScrollDown => {
+                            self.scroll(60.0);
+                        }
+                        MouseEventKind::ScrollUp => {
+                            self.scroll(-60.0);
+                        }
+                        _ => {}
+                    },
+                    Event::Resize(_, _) => {
+                        self.caps = TermCaps::detect()?;
+                        self.needs_redraw = true;
+                    }
+
+                    _ => {}
+                }
+            }
         }
 
         Ok(())
+    }
+
+    fn scroll(&mut self, delta: f32) {
+        self.scroll_y = (self.scroll_y + delta).max(0.0);
+        let vh = self.caps.rows as f32 * self.caps.cell_h as f32;
+        if self.total_doc_height > vh {
+            self.scroll_y = self.scroll_y.min(self.total_doc_height - vh);
+        } else {
+            self.scroll_y = 0.0;
+        }
+        self.needs_redraw = true;
     }
 
     fn render(&mut self) -> Result<()> {
@@ -83,8 +132,8 @@ impl Viewer {
         let pixmap = pain_document(
             &layout,
             &self.theme,
-            w as u32,
-            h as u32,
+            w,
+            h,
             self.scroll_y,
             &mut self.font_system,
             &mut self.swash_cache,
@@ -104,8 +153,6 @@ impl Viewer {
             .display_png(&png, id, Some(self.caps.cols), Some(self.caps.rows))?;
         self.current_image_id = Some(id);
 
-        std::thread::sleep(std::time::Duration::from_secs(20));
-        panic!("");
         Ok(())
     }
 }

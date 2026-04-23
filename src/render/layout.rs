@@ -83,7 +83,103 @@ impl<'a> LayoutEngine<'a> {
                     },
                 }
             }
+            Block::Paragraph { content } => {
+                let metrics = self.theme.body_metrics();
+                let attrs = Attrs::new()
+                    .family(Family::SansSerif)
+                    .color(self.theme.text.to_cosmic());
+                let buffer = self.shape_inlines(&content, metrics, attrs, self.content_width);
+                let height = self.buffer_height(&buffer);
+                LayoutBlock {
+                    y,
+                    height,
+                    content: LayoutContent::Text {
+                        buffer,
+                        x_offset: self.padding,
+                    },
+                }
+            }
+            Block::Quote { children } => {
+                let indent = self.theme.blockquote_indent + 0.6;
+                let old_cw = self.content_width;
+                let old_pad = self.padding;
+                self.content_width -= indent;
+                self.padding += indent;
 
+                let mut child_layouts = Vec::new();
+                let mut cy = y;
+                for child in children {
+                    let lb = self.layout_block(child, cy);
+                    cy += lb.height + self.theme.block_spacing;
+                    child_layouts.push(lb);
+                }
+                self.content_width = old_cw;
+                self.padding = old_pad;
+
+                let total_h = cy - y - self.theme.block_spacing;
+                LayoutBlock {
+                    y,
+                    height: total_h.max(0.0),
+                    content: LayoutContent::BlockQuote {
+                        bar_x: old_pad,
+                        children: child_layouts,
+                    },
+                }
+            }
+            Block::ThematicBreak => LayoutBlock {
+                y,
+                height: 24.0,
+                content: LayoutContent::Rule,
+            },
+            Block::Image { alt, url, .. } => {
+                let text = format!("[Image: {} ({})]", alt, url);
+                let buffer = self.shape_plane_text(
+                    &text,
+                    self.theme.body_metrics(),
+                    Attrs::new()
+                        .family(Family::SansSerif)
+                        .color(self.theme.link.to_cosmic()),
+                );
+                let h = self.buffer_height(&buffer);
+                LayoutBlock {
+                    y,
+                    height: h,
+                    content: LayoutContent::Placeholder { buffer },
+                }
+            }
+            Block::Mermaid { source } => {
+                let preview = &source[..source.len().min(60)].replace('\n', " ");
+                let text = format!("[Mermaid: {}...]", preview);
+                let buffer = self.shape_plane_text(
+                    &text,
+                    self.theme.body_metrics(),
+                    Attrs::new()
+                        .family(Family::SansSerif)
+                        .color(self.theme.link.to_cosmic()),
+                );
+                let h = self.buffer_height(&buffer);
+                LayoutBlock {
+                    y,
+                    height: h,
+                    content: LayoutContent::Placeholder { buffer },
+                }
+            }
+            Block::Math { content, .. } => {
+                let text = format!("[Math: {}]", &content[..content.len().min(60)]);
+                let buffer = self.shape_plane_text(
+                    &text,
+                    self.theme.body_metrics(),
+                    Attrs::new()
+                        .family(Family::SansSerif)
+                        .color(self.theme.link.to_cosmic()),
+                );
+                let h = self.buffer_height(&buffer);
+                LayoutBlock {
+                    y,
+                    height: h,
+                    content: LayoutContent::Placeholder { buffer },
+                }
+            }
             _ => LayoutBlock {
                 y,
                 height: 0.0,
@@ -185,7 +281,6 @@ impl<'a> LayoutEngine<'a> {
             None,
         );
         buffer.shape_until_scroll(self.font_system, false);
-
         buffer
     }
 
