@@ -44,7 +44,7 @@ fn main() -> Result<()> {
         _ => render::theme::Theme::dark(),
     };
 
-    let mut viewer = viewer::Viewer::new(content, caps, theme)?;
+    let mut viewer = viewer::Viewer::new(content, theme)?;
 
     viewer.run()
 }

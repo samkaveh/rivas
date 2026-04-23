@@ -1,43 +1,38 @@
 use anyhow::{Ok, Result};
-use cosmic_text::{FontSystem, SwashCache};
 use crossterm::ExecutableCommand;
 use crossterm::cursor;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::Terminal;
+use ratatui::backend;
+use ratatui::prelude::CrosstermBackend;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 use std::io::{Stdout, stdout};
 use std::time::Duration;
 
 use crate::document::parser::parse_markdown;
 use crate::output::capabilities::TermCaps;
 use crate::output::kitty::KittyWriter;
-use crate::render::{layout::LayoutEngine, paint::pain_document, theme::Theme};
+use crate::render::text::render_document;
+use crate::render::theme::Theme;
 
 pub struct Viewer {
     content: String,
-    scroll_y: f32,
-    total_doc_height: f32,
-    caps: TermCaps,
+    scroll: u16,
+    total_lines: u16,
     theme: Theme,
-    font_system: FontSystem,
-    swash_cache: SwashCache,
-    kitty: KittyWriter<Stdout>,
-    current_image_id: Option<u32>,
-    needs_redraw: bool,
 }
 
 impl Viewer {
-    pub fn new(content: String, caps: TermCaps, theme: Theme) -> Result<Self> {
+    pub fn new(content: String, theme: Theme) -> Result<Self> {
         Ok(Self {
             content,
-            scroll_y: 0.0,
-            total_doc_height: 0.0,
-            caps,
+            scroll: 0,
+            total_lines: 0,
             theme,
-            font_system: FontSystem::new(),
-            swash_cache: SwashCache::new(),
-            kitty: KittyWriter::new(stdout()),
-            current_image_id: None,
-            needs_redraw: true,
         })
     }
 
@@ -47,10 +42,12 @@ impl Viewer {
         stdout().execute(EnterAlternateScreen);
         stdout().execute(event::EnableMouseCapture);
         stdout().execute(cursor::Hide)?;
-        let result = self.event_loop();
+        let backend = CrosstermBackend::new(stdout());
+        let mut terminal = Terminal::new(backend)?;
+
+        let result = self.event_loop(&mut terminal);
 
         // Clean up
-        let _ = self.kitty.delete_all();
         let _ = stdout().execute(cursor::Show);
         let _ = stdout().execute(event::DisableMouseCapture);
         let _ = stdout().execute(LeaveAlternateScreen);
@@ -59,12 +56,22 @@ impl Viewer {
         result
     }
 
-    fn event_loop(&mut self) -> Result<()> {
+    fn event_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+        // Parse and render once (re-render on resize)
+        let doc = parse_markdown(&self.content);
+        let mut lines = render_document(&doc.blocks, &self.theme);
+        self.total_lines = lines.len() as u16;
+
         loop {
-            if self.needs_redraw {
-                self.render()?;
-                self.needs_redraw = false;
-            }
+            // Draw
+            terminal.draw(|frame| {
+                let area = frame.area();
+                let paragraph = Paragraph::new(lines.clone())
+                    .block(Block::default().borders(Borders::NONE))
+                    .wrap(Wrap { trim: false })
+                    .scroll((self.scroll, 0));
+                frame.render_widget(paragraph, area);
+            })?;
 
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
@@ -77,27 +84,39 @@ impl Viewer {
                         match k.code {
                             KeyCode::Char('q') | KeyCode::Esc => break,
                             KeyCode::Down | KeyCode::Char('j') => {
-                                self.scroll(60.0);
+                                self.scroll_by(1);
                             }
                             KeyCode::Up | KeyCode::Char('k') => {
-                                self.scroll(-60.0);
+                                self.scroll_by(-1);
+                            }
+                            KeyCode::PageDown | KeyCode::Char(' ') => {
+                                let h = terminal.size()?.height;
+                                self.scroll_by(h as i32 - 2);
+                            }
+                            KeyCode::PageUp => {
+                                let h = terminal.size()?.height;
+                                self.scroll_by(-(h as i32 - 2));
+                            }
+                            KeyCode::Home | KeyCode::Char('g') => {
+                                self.scroll = 0;
+                            }
+                            KeyCode::End | KeyCode::Char('G') => {
+                                let h = terminal.size()?.height;
+                                self.scroll = self.total_lines.saturating_sub(h);
                             }
                             _ => {}
                         }
                     }
                     Event::Mouse(m) => match m.kind {
                         MouseEventKind::ScrollDown => {
-                            self.scroll(60.0);
+                            self.scroll_by(3);
                         }
                         MouseEventKind::ScrollUp => {
-                            self.scroll(-60.0);
+                            self.scroll_by(-3);
                         }
                         _ => {}
                     },
-                    Event::Resize(_, _) => {
-                        self.caps = TermCaps::detect()?;
-                        self.needs_redraw = true;
-                    }
+                    Event::Resize(_, _) => {}
 
                     _ => {}
                 }
@@ -107,52 +126,8 @@ impl Viewer {
         Ok(())
     }
 
-    fn scroll(&mut self, delta: f32) {
-        self.scroll_y = (self.scroll_y + delta).max(0.0);
-        let vh = self.caps.rows as f32 * self.caps.cell_h as f32;
-        if self.total_doc_height > vh {
-            self.scroll_y = self.scroll_y.min(self.total_doc_height - vh);
-        } else {
-            self.scroll_y = 0.0;
-        }
-        self.needs_redraw = true;
-    }
-
-    fn render(&mut self) -> Result<()> {
-        let (w, h) = self.caps.area_pixels(self.caps.cols, self.caps.rows);
-        let doc = parse_markdown(&self.content);
-        let mut engine = LayoutEngine::new(&mut self.font_system, &self.theme, w as f32);
-        let layout = engine.layout_all(&doc.blocks);
-
-        // Track total document height for scroll clamping.
-        if let Some(last) = layout.last() {
-            self.total_doc_height = last.y + last.height + self.theme.padding;
-        }
-
-        let pixmap = pain_document(
-            &layout,
-            &self.theme,
-            w,
-            h,
-            self.scroll_y,
-            &mut self.font_system,
-            &mut self.swash_cache,
-        );
-
-        let png = pixmap
-            .encode_png()
-            .map_err(|e| anyhow::anyhow!("PNG encode {e}"))?;
-
-        if let Some(old) = self.current_image_id {
-            self.kitty.delete_image(old)?;
-        }
-
-        let id = self.kitty.alloc_id();
-        self.kitty.move_cursor(0, 0)?;
-        self.kitty
-            .display_png(&png, id, Some(self.caps.cols), Some(self.caps.rows))?;
-        self.current_image_id = Some(id);
-
-        Ok(())
+    fn scroll_by(&mut self, delta: i32) {
+        let new = self.scroll as i32 + delta;
+        self.scroll = new.max(0).min(self.total_lines.saturating_sub(1) as i32) as u16;
     }
 }
