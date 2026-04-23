@@ -45,5 +45,6 @@ fn main() -> Result<()> {
     };
 
     let mut viewer = viewer::Viewer::new(content, caps, theme)?;
+
     viewer.run()
 }

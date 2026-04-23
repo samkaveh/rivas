@@ -1,5 +1,3 @@
-use core::borrow;
-
 use anyhow::Result;
 
 pub struct TermCaps {

@@ -2,10 +2,9 @@ use anyhow::{Ok, Result};
 use cosmic_text::{FontSystem, SwashCache};
 use crossterm::ExecutableCommand;
 use crossterm::cursor;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
+use crossterm::event::{self};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use std::io::{Stdout, stdout};
-use std::time::Duration;
 
 use crate::document::parser::parse_markdown;
 use crate::output::capabilities::TermCaps;
@@ -43,10 +42,10 @@ impl Viewer {
 
     pub fn run(&mut self) -> Result<()> {
         crossterm::terminal::enable_raw_mode()?;
+
         stdout().execute(EnterAlternateScreen);
         stdout().execute(event::EnableMouseCapture);
         stdout().execute(cursor::Hide)?;
-
         let result = self.event_loop();
 
         // Clean up
@@ -72,9 +71,7 @@ impl Viewer {
 
     fn render(&mut self) -> Result<()> {
         let (w, h) = self.caps.area_pixels(self.caps.cols, self.caps.rows);
-        println!("{w},{h}");
         let doc = parse_markdown(&self.content);
-        println!("{:?}", doc.blocks);
         let mut engine = LayoutEngine::new(&mut self.font_system, &self.theme, w as f32);
         let layout = engine.layout_all(&doc.blocks);
 
@@ -106,6 +103,9 @@ impl Viewer {
         self.kitty
             .display_png(&png, id, Some(self.caps.cols), Some(self.caps.rows))?;
         self.current_image_id = Some(id);
+
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        panic!("");
         Ok(())
     }
 }

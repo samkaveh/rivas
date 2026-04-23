@@ -1,5 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use std::{fmt::format, fs, io::Write};
+use std::io::Write;
 
 const CHUNK_SIZE: usize = 4096;
 
@@ -47,7 +47,7 @@ impl<W: Write> KittyWriter<W> {
                     ctrl += &format!(",r={r}");
                 }
 
-                write!(self.w, "\x1b_G={ctrl};{chunk_str}\x1b\\")?;
+                write!(self.w, "\x1b_G{ctrl};{chunk_str}\x1b\\")?;
             } else {
                 // Continuation - only m flag
                 write!(self.w, "\x1b_Gm={m};{chunk_str}\x1b\\")?;
