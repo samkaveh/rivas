@@ -3,6 +3,7 @@ use clap::Parser;
 use std::io::Read;
 use std::path::PathBuf;
 
+mod assets;
 mod document;
 mod output;
 mod render;
@@ -35,7 +36,7 @@ fn main() -> Result<()> {
     };
 
     let caps = output::capabilities::TermCaps::detect()?;
-    if !caps.has_kitty_graphics {
+    if !caps.has_kitty {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 

@@ -32,3 +32,11 @@ def main():
 | January  | $250    |
 | February | $80     |
 | March    | $420    |
+
+![Alt text](./seedling.png)
+
+```mermaid
+pie title NETFLIX
+         "Time spent looking for movie" : 90
+         "Time spent watching it" : 10
+```

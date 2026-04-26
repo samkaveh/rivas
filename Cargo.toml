@@ -23,3 +23,11 @@ pulldown-cmark = "0.13.3"
 ratatui = "0.30.0"
 syntect = "5.3.0"
 tiny-skia = "0.12.0"
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "gif",
+  "webp",
+] }
+resvg = "0.47.0"
+mermaid-rs-renderer = "0.2.2"

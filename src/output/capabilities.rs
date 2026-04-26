@@ -3,32 +3,51 @@ use anyhow::Result;
 pub struct TermCaps {
     pub cols: u16,
     pub rows: u16,
-    pub cell_w: u16,
-    pub cell_h: u16,
-    pub has_kitty_graphics: bool,
+    pub cell_w_px: u16,
+    pub cell_h_px: u16,
+    pub has_kitty: bool,
 }
 
 impl TermCaps {
     pub fn detect() -> Result<Self> {
         let (cols, rows) = crossterm::terminal::size()?;
-        let (cell_w, cell_h) = cell_pixel_size().unwrap_or((8, 16));
+        let (cell_w_px, cell_h_px) = cell_pixel_size().unwrap_or((8, 16));
         Ok(Self {
             cols,
             rows,
-            cell_w,
-            cell_h,
-            has_kitty_graphics: has_kitty(),
+            cell_w_px,
+            cell_h_px,
+            has_kitty: has_kitty(),
         })
     }
-    pub fn area_pixels(&self, cols: u16, rows: u16) -> (u32, u32) {
-        (
-            cols as u32 * self.cell_w as u32,
-            rows as u32 * self.cell_h as u32,
-        )
+
+    /// returns how many terminal rows an images of height_px occupy.
+    pub fn image_rows(&self, height_px: u32) -> u16 {
+        ((height_px as f32 / self.cell_h_px as f32).ceil() as u16).max(1)
+    }
+
+    /// Pixel area of the content.
+    pub fn content_width_px(&self) -> u32 {
+        self.cols as u32 * self.cell_w_px as u32
     }
 }
 
+#[cfg(windows)]
 fn cell_pixel_size() -> Option<(u16, u16)> {
+    None
+}
+
+#[cfg(unix)]
+fn cell_pixel_size() -> Option<(u16, u16)> {
+    unsafe {
+        let mut ws: std::mem::MaybeUninit<libc::winsize> = std::mem::MaybeUninit::uninit();
+        if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, ws.as_mut_ptr()) == 0 {
+            let ws = ws.assume_init();
+            if ws.ws_xpixel > 0 && ws.ws_col > 0 {
+                return Some((ws.ws_xpixel / ws.ws_col, ws.ws_ypixel / ws.ws_row));
+            }
+        }
+    }
     None
 }
 
