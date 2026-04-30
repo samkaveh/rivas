@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+#[derive(Clone)]
 pub struct TermCaps {
     pub cols: u16,
     pub rows: u16,

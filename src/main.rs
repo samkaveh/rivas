@@ -12,7 +12,7 @@ mod viewer;
 #[derive(Parser)]
 #[command(
     name = "rivas",
-    about = "Terminal markdown viewer with pixel perfect rendering"
+    about = "Terminal markdown viewer and editor with pixel perfect rendering"
 )]
 struct Cli {
     /// Markdown file to view (reads stdin if omitted)
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
         _ => render::theme::Theme::dark(),
     };
 
-    let mut viewer = viewer::Viewer::new(content, theme)?;
+    let mut viewer = viewer::Viewer::new(content, cli.file.clone(), theme)?;
 
     viewer.run()
 }

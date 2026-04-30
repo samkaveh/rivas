@@ -53,6 +53,54 @@ Use the rendering fixture:
 cargo run -- examples/all-rendering-cases.md
 ```
 
+## Editing
+
+Rivas can switch between rendered preview and Markdown source editing without
+leaving the terminal UI.
+
+Preview mode:
+
+- `e` or `Enter`: edit the Markdown source in place.
+- `s`: open side-by-side editing with source on the left and preview on the right.
+- `j` / `Down`: scroll down.
+- `k` / `Up`: scroll up.
+- `Space` / `PageDown`: scroll down by one page.
+- `PageUp`: scroll up by one page.
+- `g` / `Home`: jump to the top.
+- `G` / `End`: jump to the bottom.
+- `q` / `Esc`: quit.
+
+Edit modes:
+
+- Rivas uses a small Vim-like normal/insert model.
+- `i`: enter insert mode at the cursor.
+- `a`: enter insert mode after the cursor.
+- `o`: open a new line below and enter insert mode.
+- `O`: open a new line above and enter insert mode.
+- `Esc`: leave insert mode. Press `Esc` again from normal mode to return to preview.
+- In insert mode, type normally to edit the document.
+- In normal mode, `h`, `j`, `k`, and `l` move left, down, up, and right.
+- Arrow keys, `Home`, `End`, `PageUp`, and `PageDown` also move the cursor.
+- `gg`: jump to the top.
+- `G`: jump to the bottom.
+- `0`: move to the start of the line.
+- `$`: move to the end of the line.
+- `Ctrl-U` / `Ctrl-D`: move up or down by half a page.
+- `x`: delete the character under the cursor.
+- `dd`: delete the current line.
+- `Tab`: insert four spaces in insert mode.
+- `Ctrl-S`: save changes to the opened file.
+- `F2`: switch to in-place editing.
+- `F3`: switch to side-by-side editing.
+- `Ctrl-Q`: quit without saving.
+
+In side-by-side mode, the preview is rebuilt as edits happen and its scroll
+position follows the source cursor.
+
+Saving is only available when Rivas was opened with a file path. Markdown read
+from stdin can still be edited during the session, but there is no destination
+path to save to.
+
 ## Supported Markdown Notes
 
 Math can be written inline with dollar delimiters:

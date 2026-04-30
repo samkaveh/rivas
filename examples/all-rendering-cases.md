@@ -1,4 +1,4 @@
-# Rivas Rendering Cases
+# Rivas Rendering Cases 🌱
 
 This file is a rendering fixture for the Markdown objects Rivas supports.
 
