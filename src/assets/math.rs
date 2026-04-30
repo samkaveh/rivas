@@ -18,9 +18,7 @@ pub fn render_math(
     max_width: u32,
     dark_theme: bool,
 ) -> Result<(Vec<u8>, u32, u32)> {
-    // Convert LaTeX → Typst math
-    let typst_math =
-        mitex::convert_text(latex, None).map_err(|e| anyhow::anyhow!("mitex error: {:?}", e))?;
+    let typst_math = convert_latex_math(latex)?;
 
     let source = build_typst_source(&typst_math, display, dark_theme);
 
@@ -30,17 +28,36 @@ pub fn render_math(
     rasterize_svg_to_png(&svg, max_width)
 }
 
+fn convert_latex_math(latex: &str) -> Result<String> {
+    mitex::convert_math(latex.trim(), None).map_err(|e| anyhow::anyhow!("mitex error: {e}"))
+}
+
 fn build_typst_source(typst_math: &str, display: bool, dark_theme: bool) -> String {
     let color = if dark_theme { "white" } else { "black" };
     let size = if display { "16pt" } else { "14pt" };
     let margin = if display { "12pt" } else { "4pt" };
+    let block = if display { "true" } else { "false" };
 
     format!(
-        "#set page(width: auto, height: auto, margin: {margin})\n\
-         #set text(fill: {color}, size: {size})\n\
-         ${typst_math}$"
+        "{MITEX_PRELUDE}\n\
+         #set page(width: auto, height: auto, margin: {margin}, fill: none)\n\
+         #set text(font: \"New Computer Modern\", fill: {color}, size: {size})\n\
+         #math.equation(block: {block}, ${typst_math}$)"
     )
 }
+
+const MITEX_PRELUDE: &str = r#"
+#let textmath(body) = text(body)
+#let mitexdisplay(body) = body
+#let mitexsqrt(first, second: none) = if second == none { math.sqrt(first) } else { math.root(first, second) }
+#let mitexoverbrace(body) = math.overbrace(body)
+#let mitexunderbrace(body) = math.underbrace(body)
+#let mitexcolor(color, body) = body
+#let colortext(color, body) = body
+#let colorbox(color, body) = body
+#let mitexmathbf(body) = math.bold(body)
+#let zws = ""
+"#;
 
 static FONTS: OnceLock<(FontBook, Vec<Font>)> = OnceLock::new();
 
@@ -133,7 +150,89 @@ fn load_bundled_fonts() -> (FontBook, Vec<Font>) {
             fonts.push(font);
         }
     }
+    for font_data in typst_assets::fonts() {
+        let bytes = Bytes::new(font_data);
+        for font in Font::iter(bytes) {
+            fonts.push(font);
+        }
+    }
 
     let book = FontBook::from_fonts(&fonts);
     (book, fonts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_png(data: &[u8], width: u32, height: u32) {
+        assert!(data.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(width > 0);
+        assert!(height > 0);
+    }
+
+    fn assert_has_non_white_or_transparent_pixels(data: &[u8]) {
+        let image = image::load_from_memory(data).unwrap().to_rgba8();
+        assert!(image.pixels().any(|pixel| {
+            let [r, g, b, a] = pixel.0;
+            a < 255 || r < 250 || g < 250 || b < 250
+        }));
+    }
+
+    #[test]
+    fn loads_bundled_fonts() {
+        let (book, fonts) = load_bundled_fonts();
+        let families: Vec<_> = book
+            .families()
+            .map(|(family, _)| family.to_string())
+            .collect();
+
+        assert!(!fonts.is_empty());
+        assert!(
+            families
+                .iter()
+                .any(|family| family == "DejaVu Math TeX Gyre")
+        );
+        assert!(
+            families
+                .iter()
+                .any(|family| family == "New Computer Modern")
+        );
+    }
+
+    #[test]
+    fn converts_bare_latex_in_math_mode() {
+        let typst_math = convert_latex_math(r"\frac{1}{2} + x^2").unwrap();
+
+        assert!(typst_math.contains("frac(1 ,2 )"));
+        assert!(typst_math.contains("x ^(2 )"));
+    }
+
+    #[test]
+    fn renders_common_math_to_png() {
+        let (png, width, height) =
+            render_math(r"\frac{1}{2} + \sqrt{x}", true, 800, false).expect("math should render");
+
+        assert_png(&png, width, height);
+        assert_has_non_white_or_transparent_pixels(&png);
+    }
+
+    #[test]
+    fn dark_theme_math_uses_transparent_page() {
+        let (png, width, height) =
+            render_math(r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}", true, 800, true)
+                .expect("math should render");
+
+        assert_png(&png, width, height);
+        assert_has_non_white_or_transparent_pixels(&png);
+    }
+
+    #[test]
+    fn max_width_limits_rendered_png_width() {
+        let (png, width, height) = render_math(r"x + y + z + \int_0^1 t^2 dt", true, 40, false)
+            .expect("math should render");
+
+        assert_png(&png, width, height);
+        assert!(width <= 40);
+    }
 }

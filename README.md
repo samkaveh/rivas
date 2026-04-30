@@ -1,70 +1,100 @@
-one line
+# Rivas
 
-# RIVAS ☺️
+Rivas is a terminal Markdown viewer focused on rendering rich Markdown content
+directly in Kitty-compatible terminals. It parses Markdown, renders terminal
+text with Ratatui, and displays image-backed content through the Kitty graphics
+protocol.
 
-A markdown view and edit tool for the command line. ☺️
-> TODO
-> Need to pay attention to the line text wrapping.
+## Features
 
-``` Python
-def main():
-  print("Hello")
+- Headings, paragraphs, block quotes, thematic breaks, and wrapped text.
+- Inline emphasis, strong text, strikethrough, inline code, links, and inline math.
+- Ordered, unordered, nested, and task lists.
+- Tables with Markdown alignment markers.
+- Local raster images.
+- Mermaid diagrams rendered to PNG.
+- LaTeX-style math rendered through MiTeX and Typst.
+- Dark and light themes.
+
+## Requirements
+
+Rivas requires a terminal that supports the Kitty graphics protocol, such as:
+
+- Kitty
+- WezTerm
+- Ghostty
+
+If the terminal does not support the protocol, Rivas exits with an error instead
+of falling back to a degraded image mode.
+
+## Usage
+
+View a file:
+
+```sh
+cargo run -- README.md
 ```
 
-- first
-- second
-- [ ] third
-- [x] fourth
+Read Markdown from stdin:
 
-1. first
-    - one
-1. second
-    - two
-      - two
-
-| Item              | In Stock | Price |
-| :---------------- | :------: | ----: |
-| Python Hat        |   True   | 23.99 |
-| SQL Hat           |   True   | 23.99 |
-| Codecademy Tee    |  False   | 19.99 |
-| Codecademy Hoodie |  False   | 42.99 |
-
-| Month    | Savings |
-| -------- | ------- |
-| January  | $250    |
-| February | $80     |
-| March    | $420    |
-
-![Alt text](./seedling.png)
-
-```mermaid
-flowchart LR:
-  A --> B --> C
+```sh
+cat README.md | cargo run
 ```
 
-```mermaid
-pie title NETFLIX
-         "Time spent looking for movie" : 90
-         "Time spent watching it" : 10
+Use the light theme:
+
+```sh
+cargo run -- --theme light README.md
 ```
 
+Use the rendering fixture:
+
+```sh
+cargo run -- examples/all-rendering-cases.md
+```
+
+## Supported Markdown Notes
+
+Math can be written inline with dollar delimiters:
+
+```md
 The quadratic formula is $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$.
+```
 
-A vector norm: $\|x\|_2 = \sqrt{x_1^2 + x_2^2}$.
+Display math can use `$$` blocks or fenced `math` blocks:
 
-$$
-I =
-\begin{bmatrix}
-1 & 0 & 0 \\
-0 & 1 & 0 \\
-0 & 0 & 1
-\end{bmatrix}
-$$
-
+````md
 $$
 \int_0^\infty e^{-x} \, dx = 1
 $$
 
 ```math
-\Delta(Rivas) = \delta(rivas) \times \frac{Rivas*2}{2}
+\Delta(Rivas) = \delta(rivas) \times \frac{2}{2}
 ```
+````
+
+Mermaid diagrams use fenced `mermaid` blocks:
+
+````md
+```mermaid
+flowchart LR
+  A --> B --> C
+```
+````
+
+Local images are resolved relative to the Markdown file:
+
+```md
+![Seedling](./seedling.png)
+```
+
+## Development
+
+Run the test suite:
+
+```sh
+cargo test
+```
+
+The math tests compile LaTeX-like input through MiTeX and Typst, rasterize the
+resulting SVG to PNG, and verify that rendered output is not an all-white page.

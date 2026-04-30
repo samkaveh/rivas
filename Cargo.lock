@@ -2863,6 +2863,7 @@ dependencies = [
  "syntect",
  "tiny-skia 0.12.0",
  "typst",
+ "typst-assets",
  "typst-svg",
 ]
 

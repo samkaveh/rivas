@@ -82,7 +82,7 @@ impl AssetCache {
         max_width: u32,
         dark_theme: bool,
     ) -> Result<&(Vec<u8>, u32, u32), &str> {
-        let hash = Self::hash_str(latex);
+        let hash = Self::hash_math(latex, display, max_width, dark_theme);
         if self.math_errors.contains_key(&hash) {
             return Err(self.math_errors.get(&hash).unwrap());
         }
@@ -110,6 +110,15 @@ impl AssetCache {
     fn hash_str(s: &str) -> u64 {
         let mut hasher = hash_map::DefaultHasher::new();
         s.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn hash_math(latex: &str, display: bool, max_width: u32, dark_theme: bool) -> u64 {
+        let mut hasher = hash_map::DefaultHasher::new();
+        latex.hash(&mut hasher);
+        display.hash(&mut hasher);
+        max_width.hash(&mut hasher);
+        dark_theme.hash(&mut hasher);
         hasher.finish()
     }
 }
