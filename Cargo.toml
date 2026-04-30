@@ -30,4 +30,7 @@ image = { version = "0.25", default-features = false, features = [
   "webp",
 ] }
 resvg = "0.47.0"
-mermaid-rs-renderer = "0.2.2"
+mermaid-rs-renderer = { version = "0.2.2" }
+mitex = "0.2.4"
+typst = "0.14.2"
+typst-svg = "0.14.2"

@@ -206,12 +206,59 @@ fn render_block(
         Block::Image { alt, url, .. } => render_image_block(url, alt, theme, cache, caps, base_dir),
 
         Block::Mermaid { source } => render_mermaid_block(source, theme, cache, caps),
-        Block::Math { content, .. } => RenderedBlock::ImagePlaceholder {
-            label: format!("Math: {}", content),
-            rows: 1,
-        },
+        Block::Math { content, display } => {
+            render_math_block(content, display, theme, cache, caps, base_dir)
+        }
 
         _ => RenderedBlock::Lines(vec![Line::from("")]),
+    }
+}
+
+fn render_math_block(
+    content: &str,
+    display: &bool,
+    theme: &Theme,
+    cache: Option<&mut AssetCache>,
+    caps: Option<&TermCaps>,
+    base_dir: Option<&Path>,
+) -> RenderedBlock {
+    let (Some(cache), Some(caps)) = (cache, caps) else {
+        return RenderedBlock::ImagePlaceholder {
+            label: format!("Math: {}", content),
+            rows: 1,
+        };
+    };
+
+    match cache.get_or_render_math(content, *display, caps.content_width_px(), theme.is_dark) {
+        Ok((png, w, h)) => {
+            if caps.has_kitty {
+                return RenderedBlock::InlineImage {
+                    png_data: png.clone(),
+                    width_px: *w,
+                    height_px: *h,
+                    rows: caps.image_rows(*h),
+                    label: "Math Block".to_string(),
+                };
+            } else {
+                return RenderedBlock::ImagePlaceholder {
+                    label: format!("Math: {}", content),
+                    rows: 1,
+                };
+            };
+        }
+        Err(err_msg) => {
+            let error_style = Style::default().fg(Color::Red);
+            return RenderedBlock::Fallback(vec![
+                Line::from(vec![
+                    Span::styled(" ⚠ Math rendering error:", error_style),
+                    Span::styled(err_msg.to_string(), error_style),
+                ]),
+                Line::from(Span::styled(
+                    format!("  src {}", content),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]);
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 pub struct Theme {
+    pub bg: Color,
     pub heading: Style,
     pub heading_h1: Style,
     pub heading_h2: Style,
@@ -20,11 +21,13 @@ pub struct Theme {
     pub table_header: Style,
     pub placeholder: Style,
     pub blanck_line: Style,
+    pub is_dark: bool,
 }
 
 impl Theme {
     pub fn dark() -> Self {
         Self {
+            bg: Color::Rgb(13, 17, 23),
             heading: Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -61,10 +64,12 @@ impl Theme {
                 .fg(Color::Rgb(88, 166, 255))
                 .add_modifier(Modifier::ITALIC),
             blanck_line: Style::default(),
+            is_dark: true,
         }
     }
     pub fn light() -> Self {
         Self {
+            bg: Color::Rgb(255, 255, 255),
             heading: Style::default()
                 .fg(Color::Rgb(31, 35, 40))
                 .add_modifier(Modifier::BOLD),
@@ -89,6 +94,7 @@ impl Theme {
             blockquote_bar: Style::default().fg(Color::Rgb(208, 215, 222)),
             blockquote_text: Style::default().fg(Color::Rgb(101, 109, 118)),
             table_border: Style::default().fg(Color::Rgb(208, 215, 222)),
+            is_dark: false,
             ..Self::dark()
         }
     }

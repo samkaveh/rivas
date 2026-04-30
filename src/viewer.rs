@@ -7,11 +7,13 @@ use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend;
 use ratatui::prelude::CrosstermBackend;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use std::io::Write;
 use std::io::{Stdout, stdout};
 use std::result;
 use std::time::Duration;
@@ -72,21 +74,27 @@ impl Viewer {
 
     fn draw(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         let lines = self.preview_lines.clone();
+        let scroll = self.scroll;
 
         terminal.draw(|frame| {
             let area = frame.area();
             let paragraph = Paragraph::new(lines)
+                .style(Style::default())
                 .wrap(Wrap { trim: false })
-                .scroll((self.scroll, 0));
+                .scroll((scroll, 0));
             frame.render_widget(paragraph, area);
         })?;
 
-        self.place_visible_images()?;
+        if self.scroll != self.prev_scroll || self.needs_image_redraw {
+            self.place_visible_images()?;
+            self.prev_scroll = self.scroll;
+            self.needs_image_redraw = false;
+        }
         Ok(())
     }
 
     fn place_visible_images(&mut self) -> Result<()> {
-        if !self.caps.has_kitty {
+        if !self.caps.has_kitty || self.pending_images.is_empty() {
             return Ok(());
         };
 
@@ -98,14 +106,21 @@ impl Viewer {
             if screen_row < 0 || screen_row >= visible_rows as i32 {
                 continue;
             }
+
+            let image_cols = ((img.width_px as f32) / (self.caps.cell_w_px as f32)).ceil() as u16;
+            let display_cols = image_cols.min(self.caps.cols);
+            let display_rows = img
+                .rows
+                .min((visible_rows as i32 - screen_row.max(0)) as u16);
             let _ = self.kitty.move_cursor(0, screen_row as u16);
             let _ = self.kitty.display_png(
                 &img.png_data,
                 img.image_id,
-                Some(self.caps.cols),
-                Some(img.rows.min(visible_rows - screen_row as u16)),
+                Some(display_cols),
+                Some(display_rows),
             );
         }
+        let _ = stdout().flush();
         Ok(())
     }
 
