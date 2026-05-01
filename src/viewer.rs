@@ -477,10 +477,10 @@ impl Viewer {
             KeyCode::F(3) => self.set_mode(ViewMode::SideBySide),
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT)
-                => {
-                    self.insert_char(c);
-                }
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.insert_char(c);
+            }
             KeyCode::Enter => self.insert_newline(),
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),

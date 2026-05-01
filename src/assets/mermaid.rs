@@ -1,4 +1,3 @@
-
 use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
 use mermaid_rs_renderer::{LayoutConfig, Theme, compute_layout, parse_mermaid, render_svg};

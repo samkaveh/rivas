@@ -2908,7 +2908,6 @@ dependencies = [
  "libc",
  "log",
  "mermaid-rs-renderer",
- "mitex",
  "pulldown-cmark",
  "ratatui",
  "regex",

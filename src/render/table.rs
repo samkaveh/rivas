@@ -22,39 +22,68 @@ pub fn render_table(
 
     let mut lines = Vec::new();
 
-    let top = format!(" ┌{}┐ ", vec!["-".repeat(col_width); ncols].join("┬"));
+    // Top border: ┌────────────────────┬────────────────────┐
+    let top = format!(
+        " ┌{}┐",
+        (0..ncols)
+            .map(|_| "─".repeat(col_width))
+            .collect::<Vec<_>>()
+            .join("┬")
+    );
     lines.push(Line::from(Span::styled(top, theme.table_border)));
 
-    let header_cells: Vec<String> = headers
-        .iter()
-        .map(|cell| {
+    // Header row — borders styled separately from header text
+    {
+        let mut spans: Vec<Span<'static>> = vec![Span::styled(" │", theme.table_border)];
+        for (i, cell) in headers.iter().enumerate() {
             let text = inlines_to_strings(&cell.content);
-            format!("{:^w$}", text, w = col_width)
-        })
-        .collect();
-    let header_line = format!(" |{}|", header_cells.join("|"));
-    lines.push(Line::from(Span::styled(header_line, theme.table_header)));
-
-    let sep = format!(" ├{}┤", vec!["-".repeat(col_width); ncols].join("┼"));
-    lines.push(Line::from(Span::styled(sep, theme.table_border)));
-
-    for row in rows {
-        let cells: Vec<String> = row
-            .iter()
-            .map(|cell| {
-                let text = inlines_to_strings(&cell.content);
-                format!("{:<w$}", text, w = col_width)
-            })
-            .collect();
-        let mut padded = cells;
-        while padded.len() < ncols {
-            padded.push(" ".repeat(col_width));
+            let padded = format!("{:^w$}", text, w = col_width);
+            spans.push(Span::styled(padded, theme.table_header));
+            if i < ncols - 1 {
+                spans.push(Span::styled("│", theme.table_border));
+            }
         }
-        let row_line = format!(" |{}|", header_cells.join("|"));
-        lines.push(Line::from(Span::styled(row_line, theme.text)));
+        spans.push(Span::styled("│", theme.table_border));
+        lines.push(Line::from(spans));
     }
 
-    let bottom = format!(" └{}┘ ", vec!["-".repeat(col_width); ncols].join("┴"));
+    // Separator: ├────────────────────┼────────────────────┤
+    let sep = format!(
+        " ├{}┤",
+        (0..ncols)
+            .map(|_| "─".repeat(col_width))
+            .collect::<Vec<_>>()
+            .join("┼")
+    );
+    lines.push(Line::from(Span::styled(sep, theme.table_border)));
+
+    // Data rows — borders styled separately from cell text
+    for row in rows {
+        let mut spans: Vec<Span<'static>> = vec![Span::styled(" │", theme.table_border)];
+        for i in 0..ncols {
+            let text = if i < row.len() {
+                inlines_to_strings(&row[i].content)
+            } else {
+                String::new()
+            };
+            let padded = format!("{:<w$}", text, w = col_width);
+            spans.push(Span::styled(padded, theme.text));
+            if i < ncols - 1 {
+                spans.push(Span::styled("│", theme.table_border));
+            }
+        }
+        spans.push(Span::styled("│", theme.table_border));
+        lines.push(Line::from(spans));
+    }
+
+    // Bottom border: └────────────────────┴────────────────────┘
+    let bottom = format!(
+        " └{}┘",
+        (0..ncols)
+            .map(|_| "─".repeat(col_width))
+            .collect::<Vec<_>>()
+            .join("┴")
+    );
     lines.push(Line::from(Span::styled(bottom, theme.table_border)));
 
     RenderedBlock::Lines(lines)

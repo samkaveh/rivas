@@ -142,7 +142,7 @@ fn render_block(
                     render_block(child, theme, 0, None, caps, base_dir)
                 {
                     for line in child_lines {
-                        let mut spans = vec![Span::styled("  | ", theme.blockquote_bar)];
+                        let mut spans = vec![Span::styled("  ▎ ", theme.blockquote_bar)];
                         spans.extend(
                             line.spans
                                 .into_iter()
@@ -200,7 +200,7 @@ fn render_block(
             rows,
         } => render_table(headers, rows, theme),
         Block::ThematicBreak => RenderedBlock::Lines(vec![Line::from(Span::styled(
-            " ____________________________",
+            " ╶─────────────────────────────────╴",
             theme.rule,
         ))]),
         Block::Image { alt, url, .. } => render_image_block(url, alt, theme, cache, caps, base_dir),
