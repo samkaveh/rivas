@@ -35,3 +35,5 @@ mitex = "0.2.4"
 typst = "0.14.2"
 typst-assets = { version = "0.14.2", features = ["fonts"] }
 typst-svg = "0.14.2"
+regex = "1.12.3"
+tylax = "0.3.5"

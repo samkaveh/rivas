@@ -1,4 +1,3 @@
-use std::fs;
 
 use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;

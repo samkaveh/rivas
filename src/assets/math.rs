@@ -1,6 +1,8 @@
 use std::sync::OnceLock;
 
+use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
+use tylax::latex_to_typst;
 use typst::{
     Library, LibraryExt, compile,
     foundations::Bytes,
@@ -10,15 +12,13 @@ use typst::{
     utils::LazyHash,
 };
 
-use crate::assets::svg::rasterize_svg_to_png;
-
 pub fn render_math(
     latex: &str,
     display: bool,
     max_width: u32,
     dark_theme: bool,
 ) -> Result<(Vec<u8>, u32, u32)> {
-    let typst_math = convert_latex_math(latex)?;
+    let typst_math = latex_to_typst(latex);
 
     let source = build_typst_source(&typst_math, display, dark_theme);
 
@@ -26,10 +26,6 @@ pub fn render_math(
 
     let svg = typst_svg::svg(&document.pages[0]);
     rasterize_svg_to_png(&svg, max_width)
-}
-
-fn convert_latex_math(latex: &str) -> Result<String> {
-    mitex::convert_math(latex.trim(), None).map_err(|e| anyhow::anyhow!("mitex error: {e}"))
 }
 
 fn build_typst_source(typst_math: &str, display: bool, dark_theme: bool) -> String {
@@ -198,14 +194,6 @@ mod tests {
                 .iter()
                 .any(|family| family == "New Computer Modern")
         );
-    }
-
-    #[test]
-    fn converts_bare_latex_in_math_mode() {
-        let typst_math = convert_latex_math(r"\frac{1}{2} + x^2").unwrap();
-
-        assert!(typst_math.contains("frac(1 ,2 )"));
-        assert!(typst_math.contains("x ^(2 )"));
     }
 
     #[test]

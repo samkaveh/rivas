@@ -196,7 +196,7 @@ fn render_block(
 
         Block::Table {
             headers,
-            alignments,
+            alignments: _,
             rows,
         } => render_table(headers, rows, theme),
         Block::ThematicBreak => RenderedBlock::Lines(vec![Line::from(Span::styled(
@@ -220,7 +220,7 @@ fn render_math_block(
     theme: &Theme,
     cache: Option<&mut AssetCache>,
     caps: Option<&TermCaps>,
-    base_dir: Option<&Path>,
+    _base_dir: Option<&Path>,
 ) -> RenderedBlock {
     let (Some(cache), Some(caps)) = (cache, caps) else {
         return RenderedBlock::ImagePlaceholder {
@@ -240,15 +240,15 @@ fn render_math_block(
                     label: "Math Block".to_string(),
                 };
             } else {
-                return RenderedBlock::ImagePlaceholder {
+                RenderedBlock::ImagePlaceholder {
                     label: format!("Math: {}", content),
                     rows: 1,
-                };
-            };
+                }
+            }
         }
         Err(err_msg) => {
             let error_style = Style::default().fg(Color::Red);
-            return RenderedBlock::Fallback(vec![
+            RenderedBlock::Fallback(vec![
                 Line::from(vec![
                     Span::styled(" ⚠ Math rendering error:", error_style),
                     Span::styled(err_msg.to_string(), error_style),
@@ -257,7 +257,7 @@ fn render_math_block(
                     format!("  src {}", content),
                     Style::default().fg(Color::DarkGray),
                 )),
-            ]);
+            ])
         }
     }
 }
@@ -265,7 +265,7 @@ fn render_math_block(
 fn render_image_block(
     url: &str,
     alt: &str,
-    theme: &Theme,
+    _theme: &Theme,
     cache: Option<&mut AssetCache>,
     caps: Option<&TermCaps>,
     base_dir: Option<&Path>,
@@ -288,15 +288,15 @@ fn render_image_block(
                     label: alt.to_string(),
                 };
             } else {
-                return RenderedBlock::ImagePlaceholder {
+                RenderedBlock::ImagePlaceholder {
                     label: format!("Image: {}", alt),
                     rows: 1,
-                };
-            };
+                }
+            }
         }
         Err(err_msg) => {
             let error_style = Style::default().fg(Color::Red);
-            return RenderedBlock::Fallback(vec![
+            RenderedBlock::Fallback(vec![
                 Line::from(vec![
                     Span::styled(" ⚠ Image error:", error_style),
                     Span::styled(err_msg.to_string(), error_style),
@@ -305,14 +305,14 @@ fn render_image_block(
                     format!("  src {}", url),
                     Style::default().fg(Color::DarkGray),
                 )),
-            ]);
+            ])
         }
     }
 }
 
 fn render_mermaid_block(
     source: &str,
-    theme: &Theme,
+    _theme: &Theme,
     cache: Option<&mut AssetCache>,
     caps: Option<&TermCaps>,
 ) -> RenderedBlock {
@@ -337,15 +337,15 @@ fn render_mermaid_block(
                     label: "Mermaid Diagram".to_string(),
                 };
             } else {
-                return RenderedBlock::ImagePlaceholder {
+                RenderedBlock::ImagePlaceholder {
                     label: "Mermaid diagram".to_string(),
                     rows: 1,
-                };
-            };
+                }
+            }
         }
         Err(err_msg) => {
             let error_style = Style::default().fg(Color::Red);
-            return RenderedBlock::Fallback(vec![
+            RenderedBlock::Fallback(vec![
                 Line::from(vec![
                     Span::styled(" ⚠ Mermaid error:", error_style),
                     Span::styled(err_msg.to_string(), error_style),
@@ -354,7 +354,7 @@ fn render_mermaid_block(
                     format!("  src {}", source),
                     Style::default().fg(Color::DarkGray),
                 )),
-            ]);
+            ])
         }
     }
 }

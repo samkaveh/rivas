@@ -475,13 +475,12 @@ impl Viewer {
             KeyCode::Esc => self.input_mode = InputMode::Normal,
             KeyCode::F(2) => self.set_mode(ViewMode::InPlaceEdit),
             KeyCode::F(3) => self.set_mode(ViewMode::SideBySide),
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT)
-                {
+                => {
                     self.insert_char(c);
                 }
-            }
             KeyCode::Enter => self.insert_newline(),
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),

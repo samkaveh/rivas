@@ -60,10 +60,10 @@ impl AssetCache {
         if self.mermaid_errors.contains_key(&hash) {
             return Err(self.mermaid_errors.get(&hash).unwrap());
         }
-        if !self.mermaid.contains_key(&hash) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.mermaid.entry(hash) {
             match super::mermaid::render_mermaid_to_png(source, max_width) {
                 Ok(data) => {
-                    self.mermaid.insert(hash, data);
+                    e.insert(data);
                 }
                 Err(e) => {
                     let msg = format!("{e}");
@@ -86,10 +86,10 @@ impl AssetCache {
         if self.math_errors.contains_key(&hash) {
             return Err(self.math_errors.get(&hash).unwrap());
         }
-        if !self.math.contains_key(&hash) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.math.entry(hash) {
             match render_math(latex, display, max_width, dark_theme) {
                 Ok(data) => {
-                    self.math.insert(hash, data);
+                    e.insert(data);
                 }
                 Err(e) => {
                     let msg = format!("{e}");

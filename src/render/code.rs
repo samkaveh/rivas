@@ -8,8 +8,8 @@ use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
 use crate::render::{text::RenderedBlock, theme::Theme};
 
-static SS: LazyLock<SyntaxSet> = LazyLock::new(|| SyntaxSet::load_defaults_newlines());
-static TS: LazyLock<ThemeSet> = LazyLock::new(|| ThemeSet::load_defaults());
+static SS: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static TS: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 pub fn render_code_block(lang: Option<&str>, code: &str, theme: &Theme) -> RenderedBlock {
     let syntax = lang
