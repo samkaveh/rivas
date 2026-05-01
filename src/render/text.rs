@@ -19,6 +19,7 @@ pub struct DocumentRender {
 
 pub struct PendingImage {
     pub row: u16, // row index in the lines vector
+    pub col: u16, // col index in the line
     pub png_data: Vec<u8>,
     pub width_px: u32,
     pub height_px: u32,
@@ -30,6 +31,7 @@ pub struct PendingImage {
 pub enum RenderedBlock {
     /// Terminal text lines (headings, paragraphs, code, lists, etc.)
     Lines(Vec<Line<'static>>),
+    LinesWithImages(Vec<Line<'static>>, Vec<PendingImage>),
     ImagePlaceholder {
         label: String,
         rows: u16,
@@ -66,6 +68,15 @@ pub fn render_document(
             RenderedBlock::Lines(block_lines) => {
                 lines.extend(block_lines);
             }
+            RenderedBlock::LinesWithImages(block_lines, block_images) => {
+                let row_pos = lines.len() as u16;
+                lines.extend(block_lines);
+                for mut img in block_images {
+                    img.row += row_pos;
+                    img.image_id = kitty.alloc_id();
+                    images.push(img);
+                }
+            }
             RenderedBlock::ImagePlaceholder { label, .. } => {
                 lines.push(Line::from(Span::styled(
                     format!(" [{}] ", label),
@@ -86,6 +97,7 @@ pub fn render_document(
                     }
                     images.push(PendingImage {
                         row: row_pos,
+                        col: 0,
                         png_data,
                         width_px,
                         height_px,
@@ -112,7 +124,7 @@ fn render_block(
     block: &Block,
     theme: &Theme,
     indent: usize,
-    cache: Option<&mut AssetCache>,
+    mut cache: Option<&mut AssetCache>,
     caps: Option<&TermCaps>,
     base_dir: Option<&Path>,
 ) -> RenderedBlock {
@@ -122,8 +134,21 @@ fn render_block(
             let prefix = "#".repeat(*level as usize);
             let style = theme.heading_style(*level);
             let mut spans = vec![Span::styled(format!("{}{} ", pad, prefix), style)];
-            render_inlines(content, style, theme, &mut spans);
-            RenderedBlock::Lines(vec![Line::from(spans)])
+            let mut inline_images = Vec::new();
+            render_inlines(
+                content,
+                style,
+                theme,
+                &mut spans,
+                cache,
+                caps,
+                &mut inline_images,
+            );
+            if inline_images.is_empty() {
+                RenderedBlock::Lines(vec![Line::from(spans)])
+            } else {
+                RenderedBlock::LinesWithImages(vec![Line::from(spans)], inline_images)
+            }
         }
 
         Block::Paragraph { content } => {
@@ -131,28 +156,52 @@ fn render_block(
             if indent > 0 {
                 spans.push(Span::raw(pad.clone()));
             }
-            render_inlines(content, theme.text, theme, &mut spans);
-            RenderedBlock::Lines(vec![Line::from(spans)])
+            let mut inline_images = Vec::new();
+            render_inlines(
+                content,
+                theme.text,
+                theme,
+                &mut spans,
+                cache,
+                caps,
+                &mut inline_images,
+            );
+            if inline_images.is_empty() {
+                RenderedBlock::Lines(vec![Line::from(spans)])
+            } else {
+                RenderedBlock::LinesWithImages(vec![Line::from(spans)], inline_images)
+            }
         }
         Block::Code { language, code } => render_code_block(language.as_deref(), code, theme),
         Block::Quote { children } => {
             let mut lines = Vec::new();
+            let mut images = Vec::new();
             for child in children {
-                if let RenderedBlock::Lines(child_lines) =
-                    render_block(child, theme, 0, None, caps, base_dir)
-                {
-                    for line in child_lines {
-                        let mut spans = vec![Span::styled("  ▎ ", theme.blockquote_bar)];
-                        spans.extend(
-                            line.spans
-                                .into_iter()
-                                .map(|s| Span::styled(s.content, theme.blockquote_text)),
-                        );
-                        lines.push(Line::from(spans));
-                    }
+                let rendered = render_block(child, theme, 0, cache.as_deref_mut(), caps, base_dir);
+                let (child_lines, child_images) = extract_lines_and_images(rendered, theme);
+
+                let row_pos = lines.len() as u16;
+                for line in child_lines {
+                    let mut spans = vec![Span::styled("  ▎ ", theme.blockquote_bar)];
+                    spans.extend(
+                        line.spans
+                            .into_iter()
+                            .map(|s| Span::styled(s.content, theme.blockquote_text)),
+                    );
+                    lines.push(Line::from(spans));
+                }
+
+                for mut img in child_images {
+                    img.row += row_pos;
+                    img.col += 4;
+                    images.push(img);
                 }
             }
-            RenderedBlock::Lines(lines)
+            if images.is_empty() {
+                RenderedBlock::Lines(lines)
+            } else {
+                RenderedBlock::LinesWithImages(lines, images)
+            }
         }
         Block::List {
             ordered,
@@ -160,6 +209,7 @@ fn render_block(
             items,
         } => {
             let mut lines = Vec::new();
+            let mut images = Vec::new();
             let mut num = start.unwrap_or(1);
             for item in items {
                 let marker = if let Some(checked) = item.checked {
@@ -171,27 +221,44 @@ fn render_block(
                 };
 
                 let marker_span = Span::styled(marker.to_string(), theme.list_marker);
+                let marker_width = marker_span.width() as u16;
 
                 for (i, child_block) in item.content.iter().enumerate() {
-                    if let RenderedBlock::Lines(child_lines) =
-                        render_block(child_block, theme, 4, None, caps, base_dir)
-                    {
-                        for (j, line) in child_lines.into_iter().enumerate() {
-                            let mut spans = Vec::new();
-                            if i == 0 && j == 0 {
-                                spans.push(marker_span.clone());
-                            } else {
-                                spans.push(Span::raw("  "));
-                            }
-                            spans.extend(line.spans);
-                            lines.push(Line::from(spans));
+                    let rendered =
+                        render_block(child_block, theme, 4, cache.as_deref_mut(), caps, base_dir);
+                    let (child_lines, child_images) = extract_lines_and_images(rendered, theme);
+
+                    let row_pos = lines.len() as u16;
+                    for (j, line) in child_lines.into_iter().enumerate() {
+                        let mut spans = Vec::new();
+                        if i == 0 && j == 0 {
+                            spans.push(marker_span.clone());
+                        } else {
+                            spans.push(Span::raw("  "));
                         }
+                        spans.extend(line.spans);
+                        lines.push(Line::from(spans));
+                    }
+
+                    for mut img in child_images {
+                        let offset = if i == 0 && img.row == 0 {
+                            marker_width
+                        } else {
+                            2
+                        };
+                        img.col += offset;
+                        img.row += row_pos;
+                        images.push(img);
                     }
                 }
                 num += 1;
             }
 
-            RenderedBlock::Lines(lines)
+            if images.is_empty() {
+                RenderedBlock::Lines(lines)
+            } else {
+                RenderedBlock::LinesWithImages(lines, images)
+            }
         }
 
         Block::Table {
@@ -254,7 +321,7 @@ fn render_math_block(
                     Span::styled(err_msg.to_string(), error_style),
                 ]),
                 Line::from(Span::styled(
-                    format!("  src {}", content),
+                    format!("  src {}", content.replace('\r', "").replace('\n', " ")),
                     Style::default().fg(Color::DarkGray),
                 )),
             ])
@@ -360,20 +427,79 @@ fn render_mermaid_block(
 }
 
 /// Flatten inline into ratatui Spans with nested styles.
-fn render_inlines(inlines: &[Inline], base: Style, theme: &Theme, out: &mut Vec<Span<'static>>) {
+fn render_inlines(
+    inlines: &[Inline],
+    base: Style,
+    theme: &Theme,
+    out: &mut Vec<Span<'static>>,
+    mut cache: Option<&mut AssetCache>,
+    caps: Option<&TermCaps>,
+    images: &mut Vec<PendingImage>,
+) {
     for inline in inlines {
         match inline {
             Inline::Text(t) => out.push(Span::styled(t.clone(), base)),
-            Inline::Bold(ch) => render_inlines(ch, base.add_modifier(Modifier::BOLD), theme, out),
-            Inline::Italic(ch) => {
-                render_inlines(ch, base.add_modifier(Modifier::ITALIC), theme, out)
-            }
-            Inline::Strikethrough(ch) => {
-                render_inlines(ch, base.add_modifier(Modifier::CROSSED_OUT), theme, out)
-            }
+            Inline::Bold(ch) => render_inlines(
+                ch,
+                base.add_modifier(Modifier::BOLD),
+                theme,
+                out,
+                cache.as_deref_mut(),
+                caps,
+                images,
+            ),
+            Inline::Italic(ch) => render_inlines(
+                ch,
+                base.add_modifier(Modifier::ITALIC),
+                theme,
+                out,
+                cache.as_deref_mut(),
+                caps,
+                images,
+            ),
+            Inline::Strikethrough(ch) => render_inlines(
+                ch,
+                base.add_modifier(Modifier::CROSSED_OUT),
+                theme,
+                out,
+                cache.as_deref_mut(),
+                caps,
+                images,
+            ),
             Inline::Code(c) => out.push(Span::styled(format!(" {} ", c), theme.inline_code)),
             Inline::Math(m) => {
-                out.push(Span::styled(m.clone(), base.add_modifier(Modifier::ITALIC)))
+                let mut rendered_as_image = false;
+                if let (Some(cache_ref), Some(caps)) = (cache.as_deref_mut(), caps) {
+                    if caps.has_kitty {
+                        if let Ok((png, w, h)) = cache_ref.get_or_render_math(
+                            m,
+                            false,
+                            caps.content_width_px(),
+                            theme.is_dark,
+                        ) {
+                            let image_cols = ((*w as f32) / (caps.cell_w_px as f32)).ceil() as u16;
+                            let col = out.iter().map(|s| s.width()).sum::<usize>() as u16;
+                            images.push(PendingImage {
+                                row: 0,
+                                col,
+                                png_data: png.clone(),
+                                width_px: *w,
+                                height_px: *h,
+                                rows: caps.image_rows(*h),
+                                image_id: 0,
+                            });
+                            out.push(Span::raw(" ".repeat(image_cols as usize)));
+                            rendered_as_image = true;
+                        }
+                    }
+                }
+                if !rendered_as_image {
+                    let cleaned = m.replace('\r', "").replace('\n', " ");
+                    out.push(Span::styled(
+                        format!("${}$", cleaned),
+                        base.add_modifier(Modifier::ITALIC),
+                    ))
+                }
             }
             Inline::Link { text, url, .. } => {
                 let label = inlines_to_strings(text);
@@ -404,4 +530,45 @@ pub fn inlines_to_strings(inlines: &[Inline]) -> String {
         }
     }
     s
+}
+fn extract_lines_and_images(
+    rendered: RenderedBlock,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Vec<PendingImage>) {
+    match rendered {
+        RenderedBlock::Lines(l) => (l, Vec::new()),
+        RenderedBlock::LinesWithImages(l, i) => (l, i),
+        RenderedBlock::ImagePlaceholder { label, .. } => (
+            vec![Line::from(Span::styled(
+                format!(" [{}] ", label),
+                theme.placeholder,
+            ))],
+            Vec::new(),
+        ),
+        RenderedBlock::InlineImage {
+            png_data,
+            width_px,
+            height_px,
+            rows,
+            ..
+        } => {
+            let mut blank_lines = Vec::new();
+            for _ in 0..rows {
+                blank_lines.push(Line::from(""));
+            }
+            (
+                blank_lines,
+                vec![PendingImage {
+                    row: 0,
+                    col: 0,
+                    png_data,
+                    width_px,
+                    height_px,
+                    rows,
+                    image_id: 0,
+                }],
+            )
+        }
+        RenderedBlock::Fallback(l) => (l, Vec::new()),
+    }
 }

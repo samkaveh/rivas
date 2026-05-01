@@ -33,17 +33,17 @@ This line should appear below it.
 
 > Rivas should render quoted text with quote styling.
 >
-> Quotes can contain **inline formatting** and `inline code`.
+> Quotes can contain **inline formatting** and `inline code` $x^2$.
 
 ## Lists
 
-- Unordered item
+- Unordered item $\int_0^\inf$
 - Unordered item with nested content
   - Nested item
   - Nested item with $x^2 + y^2 = z^2$
 - Final unordered item
 
-1. Ordered item
+1. Ordered item $E = mc^2$
 2. Ordered item with nested content
    1. Nested ordered item
    2. Another nested ordered item

@@ -261,7 +261,7 @@ impl Viewer {
                 .min((content_height as i32 - screen_row.max(0)) as u16);
             let _ = self
                 .kitty
-                .move_cursor(content_col, content_row + screen_row as u16);
+                .move_cursor(content_col + img.col, content_row + screen_row as u16);
             let _ = self.kitty.display_png(
                 &img.png_data,
                 img.image_id,

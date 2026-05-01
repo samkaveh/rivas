@@ -20,10 +20,120 @@ fn parse_blocks(events: &[Event], pos: &mut usize) -> Vec<Block> {
     while *pos < events.len() {
         match &events[*pos] {
             Event::Start(tag) => {
-                let tag = tag.clone();
-                *pos += 1;
-                if let Some(block) = parse_block_tag(&tag, events, pos) {
-                    blocks.push(block);
+                match tag {
+                    Tag::Paragraph
+                    | Tag::Heading { .. }
+                    | Tag::BlockQuote(_)
+                    | Tag::CodeBlock(_)
+                    | Tag::List(_)
+                    | Tag::Item
+                    | Tag::Table(_)
+                    | Tag::TableHead
+                    | Tag::TableRow
+                    | Tag::TableCell
+                    | Tag::FootnoteDefinition(_) => {
+                        let tag_clone = tag.clone();
+                        *pos += 1;
+                        if let Some(block) = parse_block_tag(&tag_clone, events, pos) {
+                            blocks.push(block);
+                        }
+                    }
+                    Tag::Strong
+                    | Tag::Emphasis
+                    | Tag::Strikethrough
+                    | Tag::Link { .. }
+                    | Tag::Image { .. } => {
+                        // Let it fall through to the inline gathering branch below
+                        let mut inlines = Vec::new();
+                        while *pos < events.len() {
+                            match &events[*pos] {
+                                Event::Text(t) => inlines.push(Inline::Text(t.to_string())),
+                                Event::Code(c) => inlines.push(Inline::Code(c.to_string())),
+                                Event::InlineMath(m) => inlines.push(Inline::Math(m.to_string())),
+                                Event::DisplayMath(m) => inlines.push(Inline::Math(m.to_string())),
+                                Event::SoftBreak => inlines.push(Inline::SoftBreak),
+                                Event::HardBreak => inlines.push(Inline::HardBreak),
+                                Event::InlineHtml(_) => {} // ignore inline html
+                                Event::Start(Tag::Strong) => {
+                                    *pos += 1;
+                                    inlines.push(Inline::Bold(parse_inlines(events, pos)));
+                                    continue;
+                                }
+                                Event::Start(Tag::Emphasis) => {
+                                    *pos += 1;
+                                    inlines.push(Inline::Italic(parse_inlines(events, pos)));
+                                    continue;
+                                }
+                                Event::Start(Tag::Strikethrough) => {
+                                    *pos += 1;
+                                    inlines.push(Inline::Strikethrough(parse_inlines(events, pos)));
+                                    continue;
+                                }
+                                Event::Start(Tag::Link {
+                                    dest_url, title, ..
+                                }) => {
+                                    let url = dest_url.to_string();
+                                    let title = if title.is_empty() {
+                                        None
+                                    } else {
+                                        Some(title.to_string())
+                                    };
+                                    *pos += 1;
+                                    inlines.push(Inline::Link {
+                                        text: parse_inlines(events, pos),
+                                        url,
+                                        title,
+                                    });
+                                    continue;
+                                }
+                                Event::Start(Tag::Image { dest_url, .. }) => {
+                                    let url = dest_url.to_string();
+                                    *pos += 1;
+                                    let alt_nodes = parse_inlines(events, pos);
+                                    inlines.push(Inline::Image {
+                                        alt: crate::render::text::inlines_to_strings(&alt_nodes),
+                                        url,
+                                    });
+                                    continue;
+                                }
+                                Event::Start(_)
+                                | Event::End(_)
+                                | Event::Rule
+                                | Event::Html(_)
+                                | Event::FootnoteReference(_)
+                                | Event::TaskListMarker(_) => {
+                                    break;
+                                }
+                            }
+                            *pos += 1;
+                        }
+
+                        if inlines.len() == 1 {
+                            if let Inline::Image { alt, url } = &inlines[0] {
+                                blocks.push(Block::Image {
+                                    alt: alt.clone(),
+                                    url: url.clone(),
+                                    title: None,
+                                });
+                                continue;
+                            }
+                            if let Inline::Math(m) = &inlines[0] {
+                                blocks.push(Block::Math {
+                                    content: m.clone(),
+                                    display: true,
+                                });
+                                continue;
+                            }
+                        }
+                        blocks.push(Block::Paragraph { content: inlines });
+                    }
+                    _ => {
+                        let tag_clone = tag.clone();
+                        *pos += 1;
+                        if let Some(block) = parse_block_tag(&tag_clone, events, pos) {
+                            blocks.push(block);
+                        }
+                    }
                 }
             }
             Event::End(_) => {
@@ -47,11 +157,94 @@ fn parse_blocks(events: &[Event], pos: &mut usize) -> Vec<Block> {
                 });
                 *pos += 1;
             }
-            Event::Text(t) => {
-                blocks.push(Block::Paragraph {
-                    content: vec![Inline::Text(t.to_string())],
-                });
-                *pos += 1;
+            Event::Text(_)
+            | Event::Code(_)
+            | Event::InlineMath(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::InlineHtml(_) => {
+                let mut inlines = Vec::new();
+                while *pos < events.len() {
+                    match &events[*pos] {
+                        Event::Text(t) => inlines.push(Inline::Text(t.to_string())),
+                        Event::Code(c) => inlines.push(Inline::Code(c.to_string())),
+                        Event::InlineMath(m) => inlines.push(Inline::Math(m.to_string())),
+                        Event::DisplayMath(m) => inlines.push(Inline::Math(m.to_string())),
+                        Event::SoftBreak => inlines.push(Inline::SoftBreak),
+                        Event::HardBreak => inlines.push(Inline::HardBreak),
+                        Event::InlineHtml(_) => {}
+                        Event::Start(Tag::Strong) => {
+                            *pos += 1;
+                            inlines.push(Inline::Bold(parse_inlines(events, pos)));
+                            continue;
+                        }
+                        Event::Start(Tag::Emphasis) => {
+                            *pos += 1;
+                            inlines.push(Inline::Italic(parse_inlines(events, pos)));
+                            continue;
+                        }
+                        Event::Start(Tag::Strikethrough) => {
+                            *pos += 1;
+                            inlines.push(Inline::Strikethrough(parse_inlines(events, pos)));
+                            continue;
+                        }
+                        Event::Start(Tag::Link {
+                            dest_url, title, ..
+                        }) => {
+                            let url = dest_url.to_string();
+                            let title = if title.is_empty() {
+                                None
+                            } else {
+                                Some(title.to_string())
+                            };
+                            *pos += 1;
+                            inlines.push(Inline::Link {
+                                text: parse_inlines(events, pos),
+                                url,
+                                title,
+                            });
+                            continue;
+                        }
+                        Event::Start(Tag::Image { dest_url, .. }) => {
+                            let url = dest_url.to_string();
+                            *pos += 1;
+                            let alt_nodes = parse_inlines(events, pos);
+                            inlines.push(Inline::Image {
+                                alt: crate::render::text::inlines_to_strings(&alt_nodes),
+                                url,
+                            });
+                            continue;
+                        }
+                        Event::Start(_)
+                        | Event::End(_)
+                        | Event::Rule
+                        | Event::Html(_)
+                        | Event::FootnoteReference(_)
+                        | Event::TaskListMarker(_) => {
+                            break;
+                        }
+                    }
+                    *pos += 1;
+                }
+
+                if inlines.len() == 1 {
+                    if let Inline::Image { alt, url } = &inlines[0] {
+                        blocks.push(Block::Image {
+                            alt: alt.clone(),
+                            url: url.clone(),
+                            title: None,
+                        });
+                        continue;
+                    }
+                    if let Inline::Math(m) = &inlines[0] {
+                        blocks.push(Block::Math {
+                            content: m.clone(),
+                            display: true,
+                        });
+                        continue;
+                    }
+                }
+                blocks.push(Block::Paragraph { content: inlines });
             }
             _ => {
                 *pos += 1;
