@@ -213,7 +213,7 @@ fn render_block(
             let mut num = start.unwrap_or(1);
             for item in items {
                 let marker = if let Some(checked) = item.checked {
-                    if checked { " ☒ " } else { " ☐" }
+                    if checked { " ☒" } else { " ☐" }
                 } else if *ordered {
                     &format!(" {}.", num)
                 } else {
