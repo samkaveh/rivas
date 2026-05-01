@@ -144,5 +144,5 @@ Run the test suite:
 cargo test
 ```
 
-The math tests compile LaTeX-like input through MiTeX and Typst, rasterize the
+The math tests compile LaTeX-like input through TyLax and Typst, rasterize the
 resulting SVG to PNG, and verify that rendered output is not an all-white page.
