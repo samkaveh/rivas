@@ -1,11 +1,8 @@
 use ratatui::text::{Line, Span};
 
 use crate::{
-    document::model::TableCell,
-    render::{
-        text::{RenderedBlock, inlines_to_strings},
-        theme::Theme,
-    },
+    document::model::{self, TableCell},
+    render::{text::RenderedBlock, theme::Theme},
 };
 
 pub fn render_table(
@@ -36,7 +33,7 @@ pub fn render_table(
     {
         let mut spans: Vec<Span<'static>> = vec![Span::styled(" │", theme.table_border)];
         for (i, cell) in headers.iter().enumerate() {
-            let text = inlines_to_strings(&cell.content);
+            let text = model::inlines_to_text(&cell.content);
             let padded = format!("{:^w$}", text, w = col_width);
             spans.push(Span::styled(padded, theme.table_header));
             if i < ncols - 1 {
@@ -62,7 +59,7 @@ pub fn render_table(
         let mut spans: Vec<Span<'static>> = vec![Span::styled(" │", theme.table_border)];
         for i in 0..ncols {
             let text = if i < row.len() {
-                inlines_to_strings(&row[i].content)
+                model::inlines_to_text(&row[i].content)
             } else {
                 String::new()
             };
