@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crossterm::ExecutableCommand;
 use crossterm::cursor;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::KeyEventKind;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
@@ -137,6 +138,20 @@ impl Viewer {
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(1), Constraint::Length(1)])
                 .split(area);
+
+            if self.mode == ViewMode::InPlaceEdit || self.mode == ViewMode::SideBySide {
+                match self.input_mode {
+                    InputMode::Insert => {
+                        let _ = stdout().execute(SetCursorStyle::BlinkingBar);
+                    }
+                    InputMode::Normal => {
+                        let _ = stdout().execute(SetCursorStyle::SteadyBlock);
+                    }
+                }
+            } else {
+                // Hide or reset cursor when just previewing
+                let _ = stdout().execute(cursor::Hide);
+            }
 
             match mode {
                 ViewMode::Preview => {
@@ -277,7 +292,6 @@ impl Viewer {
         crossterm::terminal::enable_raw_mode()?;
 
         let _ = stdout().execute(EnterAlternateScreen);
-        let _ = stdout().execute(event::EnableMouseCapture);
         stdout().execute(cursor::Hide)?;
         let backend = CrosstermBackend::new(stdout());
         let mut terminal = Terminal::new(backend)?;
@@ -288,7 +302,6 @@ impl Viewer {
         // Clean up
         let _ = self.kitty.delete_all();
         let _ = stdout().execute(cursor::Show);
-        let _ = stdout().execute(event::DisableMouseCapture);
         let _ = stdout().execute(LeaveAlternateScreen);
         let _ = crossterm::terminal::disable_raw_mode();
 
