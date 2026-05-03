@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::theme::Theme;
 use crate::assets::cache::AssetCache;
-use crate::document::model::*;
+use crate::document::model::{self, *};
 use crate::output::capabilities::TermCaps;
 use crate::output::kitty::KittyWriter;
 use crate::render::code::render_code_block;
@@ -502,7 +502,7 @@ fn render_inlines(
                 }
             }
             Inline::Link { text, url, .. } => {
-                let label = inlines_to_strings(text);
+                let label = model::inlines_to_text(text);
                 let hyperlink = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", url, label);
                 out.push(Span::styled(hyperlink, theme.inline_code));
             }
@@ -515,22 +515,6 @@ fn render_inlines(
     }
 }
 
-pub fn inlines_to_strings(inlines: &[Inline]) -> String {
-    let mut s = String::new();
-    for i in inlines {
-        match i {
-            Inline::Text(t) => s.push_str(t),
-            Inline::Code(c) | Inline::Math(c) => s.push_str(c),
-            Inline::Bold(ch) | Inline::Italic(ch) | Inline::Strikethrough(ch) => {
-                s.push_str(&inlines_to_strings(ch))
-            }
-            Inline::Link { text, .. } => s.push_str(&inlines_to_strings(text)),
-            Inline::SoftBreak => s.push(' '),
-            _ => {}
-        }
-    }
-    s
-}
 fn extract_lines_and_images(
     rendered: RenderedBlock,
     theme: &Theme,

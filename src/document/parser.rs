@@ -13,127 +13,157 @@ pub fn parse_markdown(source: &str) -> Document {
     Document { blocks }
 }
 
+/// If a list of inlines contains exactly one Image or display-Math element,
+/// promote it to the corresponding block-level node. Otherwise wrap in a Paragraph.
+fn inlines_to_block(inlines: Vec<Inline>) -> Block {
+    if inlines.len() == 1 {
+        let mut inlines = inlines;
+        match inlines.remove(0) {
+            Inline::Image { alt, url } => {
+                return Block::Image {
+                    alt,
+                    url,
+                    title: None,
+                };
+            }
+            Inline::Math(m) => {
+                return Block::Math {
+                    content: m,
+                    display: true,
+                };
+            }
+            other => {
+                return Block::Paragraph {
+                    content: vec![other],
+                };
+            }
+        }
+    }
+    Block::Paragraph { content: inlines }
+}
+
+// ── Inline termination modes ────────────────────────────────────────────────
+
+/// Controls when `parse_inlines_until` stops collecting.
+#[derive(Clone, Copy, PartialEq)]
+enum StopCondition {
+    /// Stop when an `Event::End(_)` is encountered (and consume it).
+    /// Used inside Paragraph, Heading, Strong, Emphasis, Link, etc.
+    OnEndTag,
+    /// Stop (without consuming) when a non-inline event is encountered.
+    /// Used for stray inline events that appear outside any block-level tag.
+    OnBlockBoundary,
+}
+
+/// Unified inline parser. Collects inline events and returns them.
+///
+/// - `OnEndTag`: consumes the matching `End` event and returns.
+/// - `OnBlockBoundary`: stops (without consuming) when a block-level event is seen.
+fn parse_inlines_until(events: &[Event], pos: &mut usize, stop: StopCondition) -> Vec<Inline> {
+    let mut inlines = Vec::new();
+    while *pos < events.len() {
+        match &events[*pos] {
+            // ── Leaf inline events ──────────────────────────────────────
+            Event::Text(t) => {
+                inlines.push(Inline::Text(t.to_string()));
+                *pos += 1;
+            }
+            Event::Code(c) => {
+                inlines.push(Inline::Code(c.to_string()));
+                *pos += 1;
+            }
+            Event::InlineMath(m) | Event::DisplayMath(m) => {
+                inlines.push(Inline::Math(m.to_string()));
+                *pos += 1;
+            }
+            Event::SoftBreak => {
+                inlines.push(Inline::SoftBreak);
+                *pos += 1;
+            }
+            Event::HardBreak => {
+                inlines.push(Inline::HardBreak);
+                *pos += 1;
+            }
+            Event::InlineHtml(_) => {
+                *pos += 1; // ignore
+            }
+
+            // ── Nested inline tags (always recurse with OnEndTag) ───────
+            Event::Start(Tag::Strong) => {
+                *pos += 1;
+                inlines.push(Inline::Bold(parse_inlines(events, pos)));
+            }
+            Event::Start(Tag::Emphasis) => {
+                *pos += 1;
+                inlines.push(Inline::Italic(parse_inlines(events, pos)));
+            }
+            Event::Start(Tag::Strikethrough) => {
+                *pos += 1;
+                inlines.push(Inline::Strikethrough(parse_inlines(events, pos)));
+            }
+            Event::Start(Tag::Link {
+                dest_url, title, ..
+            }) => {
+                let url = dest_url.to_string();
+                let title = if title.is_empty() {
+                    None
+                } else {
+                    Some(title.to_string())
+                };
+                *pos += 1;
+                inlines.push(Inline::Link {
+                    text: parse_inlines(events, pos),
+                    url,
+                    title,
+                });
+            }
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                let url = dest_url.to_string();
+                *pos += 1;
+                let alt_nodes = parse_inlines(events, pos);
+                inlines.push(Inline::Image {
+                    alt: inlines_to_text(&alt_nodes),
+                    url,
+                });
+            }
+
+            // ── Termination ─────────────────────────────────────────────
+            Event::End(_) if stop == StopCondition::OnEndTag => {
+                *pos += 1;
+                return inlines;
+            }
+
+            // Any other event — for OnBlockBoundary, stop without consuming;
+            // for OnEndTag, skip unknown events.
+            _ => {
+                if stop == StopCondition::OnBlockBoundary {
+                    break;
+                }
+                *pos += 1;
+            }
+        }
+    }
+    inlines
+}
+
+/// Parse inline events until the matching End tag (the standard entry point).
+fn parse_inlines(events: &[Event], pos: &mut usize) -> Vec<Inline> {
+    parse_inlines_until(events, pos, StopCondition::OnEndTag)
+}
+
+// ── Block-level parsing ─────────────────────────────────────────────────────
+
 /// Parse events into blocks. Advances `pos` past consumed events.
-/// Returns when it hits and `End` event (parent consider closing) or EOF.
+/// Returns when it hits an `End` event (parent closing) or EOF.
 fn parse_blocks(events: &[Event], pos: &mut usize) -> Vec<Block> {
     let mut blocks = Vec::new();
     while *pos < events.len() {
         match &events[*pos] {
             Event::Start(tag) => {
-                match tag {
-                    Tag::Paragraph
-                    | Tag::Heading { .. }
-                    | Tag::BlockQuote(_)
-                    | Tag::CodeBlock(_)
-                    | Tag::List(_)
-                    | Tag::Item
-                    | Tag::Table(_)
-                    | Tag::TableHead
-                    | Tag::TableRow
-                    | Tag::TableCell
-                    | Tag::FootnoteDefinition(_) => {
-                        let tag_clone = tag.clone();
-                        *pos += 1;
-                        if let Some(block) = parse_block_tag(&tag_clone, events, pos) {
-                            blocks.push(block);
-                        }
-                    }
-                    Tag::Strong
-                    | Tag::Emphasis
-                    | Tag::Strikethrough
-                    | Tag::Link { .. }
-                    | Tag::Image { .. } => {
-                        // Let it fall through to the inline gathering branch below
-                        let mut inlines = Vec::new();
-                        while *pos < events.len() {
-                            match &events[*pos] {
-                                Event::Text(t) => inlines.push(Inline::Text(t.to_string())),
-                                Event::Code(c) => inlines.push(Inline::Code(c.to_string())),
-                                Event::InlineMath(m) => inlines.push(Inline::Math(m.to_string())),
-                                Event::DisplayMath(m) => inlines.push(Inline::Math(m.to_string())),
-                                Event::SoftBreak => inlines.push(Inline::SoftBreak),
-                                Event::HardBreak => inlines.push(Inline::HardBreak),
-                                Event::InlineHtml(_) => {} // ignore inline html
-                                Event::Start(Tag::Strong) => {
-                                    *pos += 1;
-                                    inlines.push(Inline::Bold(parse_inlines(events, pos)));
-                                    continue;
-                                }
-                                Event::Start(Tag::Emphasis) => {
-                                    *pos += 1;
-                                    inlines.push(Inline::Italic(parse_inlines(events, pos)));
-                                    continue;
-                                }
-                                Event::Start(Tag::Strikethrough) => {
-                                    *pos += 1;
-                                    inlines.push(Inline::Strikethrough(parse_inlines(events, pos)));
-                                    continue;
-                                }
-                                Event::Start(Tag::Link {
-                                    dest_url, title, ..
-                                }) => {
-                                    let url = dest_url.to_string();
-                                    let title = if title.is_empty() {
-                                        None
-                                    } else {
-                                        Some(title.to_string())
-                                    };
-                                    *pos += 1;
-                                    inlines.push(Inline::Link {
-                                        text: parse_inlines(events, pos),
-                                        url,
-                                        title,
-                                    });
-                                    continue;
-                                }
-                                Event::Start(Tag::Image { dest_url, .. }) => {
-                                    let url = dest_url.to_string();
-                                    *pos += 1;
-                                    let alt_nodes = parse_inlines(events, pos);
-                                    inlines.push(Inline::Image {
-                                        alt: crate::render::text::inlines_to_strings(&alt_nodes),
-                                        url,
-                                    });
-                                    continue;
-                                }
-                                Event::Start(_)
-                                | Event::End(_)
-                                | Event::Rule
-                                | Event::Html(_)
-                                | Event::FootnoteReference(_)
-                                | Event::TaskListMarker(_) => {
-                                    break;
-                                }
-                            }
-                            *pos += 1;
-                        }
-
-                        if inlines.len() == 1 {
-                            if let Inline::Image { alt, url } = &inlines[0] {
-                                blocks.push(Block::Image {
-                                    alt: alt.clone(),
-                                    url: url.clone(),
-                                    title: None,
-                                });
-                                continue;
-                            }
-                            if let Inline::Math(m) = &inlines[0] {
-                                blocks.push(Block::Math {
-                                    content: m.clone(),
-                                    display: true,
-                                });
-                                continue;
-                            }
-                        }
-                        blocks.push(Block::Paragraph { content: inlines });
-                    }
-                    _ => {
-                        let tag_clone = tag.clone();
-                        *pos += 1;
-                        if let Some(block) = parse_block_tag(&tag_clone, events, pos) {
-                            blocks.push(block);
-                        }
-                    }
+                let tag_clone = tag.clone();
+                *pos += 1;
+                if let Some(block) = parse_block_tag(&tag_clone, events, pos) {
+                    blocks.push(block);
                 }
             }
             Event::End(_) => {
@@ -157,94 +187,15 @@ fn parse_blocks(events: &[Event], pos: &mut usize) -> Vec<Block> {
                 });
                 *pos += 1;
             }
+            // Stray inline events outside any block tag — gather into a paragraph
             Event::Text(_)
             | Event::Code(_)
             | Event::InlineMath(_)
             | Event::SoftBreak
             | Event::HardBreak
             | Event::InlineHtml(_) => {
-                let mut inlines = Vec::new();
-                while *pos < events.len() {
-                    match &events[*pos] {
-                        Event::Text(t) => inlines.push(Inline::Text(t.to_string())),
-                        Event::Code(c) => inlines.push(Inline::Code(c.to_string())),
-                        Event::InlineMath(m) => inlines.push(Inline::Math(m.to_string())),
-                        Event::DisplayMath(m) => inlines.push(Inline::Math(m.to_string())),
-                        Event::SoftBreak => inlines.push(Inline::SoftBreak),
-                        Event::HardBreak => inlines.push(Inline::HardBreak),
-                        Event::InlineHtml(_) => {}
-                        Event::Start(Tag::Strong) => {
-                            *pos += 1;
-                            inlines.push(Inline::Bold(parse_inlines(events, pos)));
-                            continue;
-                        }
-                        Event::Start(Tag::Emphasis) => {
-                            *pos += 1;
-                            inlines.push(Inline::Italic(parse_inlines(events, pos)));
-                            continue;
-                        }
-                        Event::Start(Tag::Strikethrough) => {
-                            *pos += 1;
-                            inlines.push(Inline::Strikethrough(parse_inlines(events, pos)));
-                            continue;
-                        }
-                        Event::Start(Tag::Link {
-                            dest_url, title, ..
-                        }) => {
-                            let url = dest_url.to_string();
-                            let title = if title.is_empty() {
-                                None
-                            } else {
-                                Some(title.to_string())
-                            };
-                            *pos += 1;
-                            inlines.push(Inline::Link {
-                                text: parse_inlines(events, pos),
-                                url,
-                                title,
-                            });
-                            continue;
-                        }
-                        Event::Start(Tag::Image { dest_url, .. }) => {
-                            let url = dest_url.to_string();
-                            *pos += 1;
-                            let alt_nodes = parse_inlines(events, pos);
-                            inlines.push(Inline::Image {
-                                alt: crate::render::text::inlines_to_strings(&alt_nodes),
-                                url,
-                            });
-                            continue;
-                        }
-                        Event::Start(_)
-                        | Event::End(_)
-                        | Event::Rule
-                        | Event::Html(_)
-                        | Event::FootnoteReference(_)
-                        | Event::TaskListMarker(_) => {
-                            break;
-                        }
-                    }
-                    *pos += 1;
-                }
-
-                if inlines.len() == 1 {
-                    if let Inline::Image { alt, url } = &inlines[0] {
-                        blocks.push(Block::Image {
-                            alt: alt.clone(),
-                            url: url.clone(),
-                            title: None,
-                        });
-                        continue;
-                    }
-                    if let Inline::Math(m) = &inlines[0] {
-                        blocks.push(Block::Math {
-                            content: m.clone(),
-                            display: true,
-                        });
-                        continue;
-                    }
-                }
-                blocks.push(Block::Paragraph { content: inlines });
+                let inlines = parse_inlines_until(events, pos, StopCondition::OnBlockBoundary);
+                blocks.push(inlines_to_block(inlines));
             }
             _ => {
                 *pos += 1;
@@ -270,23 +221,7 @@ fn parse_block_tag(tag: &Tag, events: &[Event], pos: &mut usize) -> Option<Block
         }
         Tag::Paragraph => {
             let inlines = parse_inlines(events, pos);
-            // Promote single-image paragraphs to block images
-            if inlines.len() == 1 {
-                if let Inline::Image { alt, url } = &inlines[0] {
-                    return Some(Block::Image {
-                        alt: alt.clone(),
-                        url: url.clone(),
-                        title: None,
-                    });
-                }
-                if let Inline::Math(m) = &inlines[0] {
-                    return Some(Block::Math {
-                        content: m.to_string(),
-                        display: true,
-                    });
-                }
-            }
-            Some(Block::Paragraph { content: inlines })
+            Some(inlines_to_block(inlines))
         }
         Tag::CodeBlock(kind) => {
             let lang = match kind {
@@ -294,111 +229,74 @@ fn parse_block_tag(tag: &Tag, events: &[Event], pos: &mut usize) -> Option<Block
                 _ => None,
             };
             let code = collect_text(events, pos);
-            if lang.as_deref() == Some("mermaid") {
-                return Some(Block::Mermaid { source: code });
-            }
-            if lang.as_deref() == Some("math") {
-                return Some(Block::Math {
+            match lang.as_deref() {
+                Some("mermaid") => Some(Block::Mermaid { source: code }),
+                Some("math") => Some(Block::Math {
                     content: code,
                     display: true,
-                });
+                }),
+                _ => Some(Block::Code {
+                    language: lang,
+                    code,
+                }),
             }
-            Some(Block::Code {
-                language: lang,
-                code,
-            })
         }
         Tag::BlockQuote(_) => {
             let children = parse_blocks(events, pos);
             Some(Block::Quote { children })
         }
-        Tag::List(start) => {
-            let ordered = start.is_some();
-            let mut items = Vec::new();
-            while *pos < events.len() {
-                match &events[*pos] {
-                    Event::Start(Tag::Item) => {
-                        *pos += 1;
-                        let mut checked = None;
-                        if let Some(Event::TaskListMarker(c)) = events.get(*pos) {
-                            checked = Some(*c);
-                            *pos += 1;
-                        }
-                        let content = parse_blocks(events, pos);
-                        items.push(ListItem { checked, content });
-                    }
-                    Event::End(TagEnd::List(_)) => {
-                        *pos += 1;
-                        break;
-                    }
-                    _ => {
-                        *pos += 1;
-                    }
-                }
-            }
-            Some(Block::List {
-                ordered,
-                start: *start,
-                items,
+        Tag::List(start) => Some(parse_list(*start, events, pos)),
+        Tag::Table(aligns) => Some(parse_table(aligns, events, pos)),
+
+        // Inline-level tags that appear at block level (e.g. bare `**bold**`).
+        // We must wrap them in the correct inline node before wrapping in a paragraph,
+        // otherwise the formatting is lost.
+        Tag::Strong => {
+            let children = parse_inlines(events, pos);
+            Some(Block::Paragraph {
+                content: vec![Inline::Bold(children)],
             })
         }
-        Tag::Table(aligns) => {
-            let alignments: Vec<Alignment> = aligns
-                .iter()
-                .map(|a| match a {
-                    pulldown_cmark::Alignment::Left => Alignment::Left,
-                    pulldown_cmark::Alignment::Right => Alignment::Right,
-                    pulldown_cmark::Alignment::Center => Alignment::Center,
-                    pulldown_cmark::Alignment::None => Alignment::None,
-                })
-                .collect();
-            let mut headers = Vec::new();
-            let mut rows: Vec<Vec<TableCell>> = Vec::new();
-            let mut in_head = false;
-            while *pos < events.len() {
-                match &events[*pos] {
-                    Event::Start(Tag::TableHead) => {
-                        in_head = true;
-                        *pos += 1;
-                    }
-                    Event::End(TagEnd::TableHead) => {
-                        in_head = false;
-                        *pos += 1;
-                    }
-                    Event::Start(Tag::TableRow) => {
-                        if !in_head {
-                            rows.push(Vec::new());
-                        }
-                        *pos += 1;
-                    }
-                    Event::End(TagEnd::TableRow) => {
-                        *pos += 1;
-                    }
-                    Event::Start(Tag::TableCell) => {
-                        *pos += 1;
-                        let inlines = parse_inlines(events, pos);
-                        let cell = TableCell { content: inlines };
-                        if in_head {
-                            headers.push(cell);
-                        } else if let Some(row) = rows.last_mut() {
-                            row.push(cell);
-                        }
-                    }
-                    Event::End(TagEnd::Table) => {
-                        *pos += 1;
-                        break;
-                    }
-                    _ => {
-                        *pos += 1;
-                    }
-                }
-            }
-            Some(Block::Table {
-                headers,
-                alignments,
-                rows,
+        Tag::Emphasis => {
+            let children = parse_inlines(events, pos);
+            Some(Block::Paragraph {
+                content: vec![Inline::Italic(children)],
             })
         }
+        Tag::Strikethrough => {
+            let children = parse_inlines(events, pos);
+            Some(Block::Paragraph {
+                content: vec![Inline::Strikethrough(children)],
+            })
+        }
+        Tag::Link {
+            dest_url, title, ..
+        } => {
+            let url = dest_url.to_string();
+            let title = if title.is_empty() {
+                None
+            } else {
+                Some(title.to_string())
+            };
+            let children = parse_inlines(events, pos);
+            Some(Block::Paragraph {
+                content: vec![Inline::Link {
+                    text: children,
+                    url,
+                    title,
+                }],
+            })
+        }
+        Tag::Image { dest_url, .. } => {
+            let url = dest_url.to_string();
+            let alt_nodes = parse_inlines(events, pos);
+            Some(Block::Image {
+                alt: inlines_to_text(&alt_nodes),
+                url,
+                title: None,
+            })
+        }
+
         _ => {
             skip_to_end(events, pos);
             None
@@ -406,85 +304,98 @@ fn parse_block_tag(tag: &Tag, events: &[Event], pos: &mut usize) -> Option<Block
     }
 }
 
-/// Parse inline events until matching the End tag
-fn parse_inlines(events: &[Event], pos: &mut usize) -> Vec<Inline> {
-    let mut inlines = Vec::new();
+/// Parse a list and its items.
+fn parse_list(start: Option<u64>, events: &[Event], pos: &mut usize) -> Block {
+    let ordered = start.is_some();
+    let mut items = Vec::new();
     while *pos < events.len() {
         match &events[*pos] {
-            Event::Text(t) => {
-                inlines.push(Inline::Text(t.to_string()));
+            Event::Start(Tag::Item) => {
                 *pos += 1;
+                let mut checked = None;
+                if let Some(Event::TaskListMarker(c)) = events.get(*pos) {
+                    checked = Some(*c);
+                    *pos += 1;
+                }
+                let content = parse_blocks(events, pos);
+                items.push(ListItem { checked, content });
             }
-            Event::Code(c) => {
-                inlines.push(Inline::Code(c.to_string()));
+            Event::End(TagEnd::List(_)) => {
                 *pos += 1;
-            }
-            Event::InlineMath(m) => {
-                inlines.push(Inline::Math(m.to_string()));
-                *pos += 1;
-            }
-            Event::DisplayMath(m) => {
-                inlines.push(Inline::Math(m.to_string()));
-                *pos += 1;
-            }
-            Event::SoftBreak => {
-                inlines.push(Inline::SoftBreak);
-                *pos += 1;
-            }
-            Event::HardBreak => {
-                inlines.push(Inline::HardBreak);
-                *pos += 1;
-            }
-            Event::Start(Tag::Strong) => {
-                *pos += 1;
-                let children = parse_inlines(events, pos);
-                inlines.push(Inline::Bold(children));
-            }
-            Event::Start(Tag::Emphasis) => {
-                *pos += 1;
-                let children = parse_inlines(events, pos);
-                inlines.push(Inline::Italic(children));
-            }
-            Event::Start(Tag::Strikethrough) => {
-                *pos += 1;
-                let children = parse_inlines(events, pos);
-                inlines.push(Inline::Strikethrough(children));
-            }
-            Event::Start(Tag::Link {
-                dest_url, title, ..
-            }) => {
-                let url = dest_url.to_string();
-                let title = if title.is_empty() {
-                    None
-                } else {
-                    Some(title.to_string())
-                };
-                *pos += 1;
-                let children = parse_inlines(events, pos);
-                inlines.push(Inline::Link {
-                    text: children,
-                    url,
-                    title,
-                });
-            }
-            Event::Start(Tag::Image { dest_url, .. }) => {
-                let url = dest_url.to_string();
-                *pos += 1;
-                let children = parse_inlines(events, pos);
-                let alt = inlines_to_text(&children);
-                inlines.push(Inline::Image { alt, url });
-            }
-            Event::End(_) => {
-                *pos += 1;
-                return inlines;
+                break;
             }
             _ => {
                 *pos += 1;
             }
         }
     }
-    inlines
+    Block::List {
+        ordered,
+        start,
+        items,
+    }
 }
+
+/// Parse a table (headers + body rows).
+fn parse_table(aligns: &[pulldown_cmark::Alignment], events: &[Event], pos: &mut usize) -> Block {
+    let alignments: Vec<Alignment> = aligns
+        .iter()
+        .map(|a| match a {
+            pulldown_cmark::Alignment::Left => Alignment::Left,
+            pulldown_cmark::Alignment::Right => Alignment::Right,
+            pulldown_cmark::Alignment::Center => Alignment::Center,
+            pulldown_cmark::Alignment::None => Alignment::None,
+        })
+        .collect();
+    let mut headers = Vec::new();
+    let mut rows: Vec<Vec<TableCell>> = Vec::new();
+    let mut in_head = false;
+    while *pos < events.len() {
+        match &events[*pos] {
+            Event::Start(Tag::TableHead) => {
+                in_head = true;
+                *pos += 1;
+            }
+            Event::End(TagEnd::TableHead) => {
+                in_head = false;
+                *pos += 1;
+            }
+            Event::Start(Tag::TableRow) => {
+                if !in_head {
+                    rows.push(Vec::new());
+                }
+                *pos += 1;
+            }
+            Event::End(TagEnd::TableRow) => {
+                *pos += 1;
+            }
+            Event::Start(Tag::TableCell) => {
+                *pos += 1;
+                let inlines = parse_inlines(events, pos);
+                let cell = TableCell { content: inlines };
+                if in_head {
+                    headers.push(cell);
+                } else if let Some(row) = rows.last_mut() {
+                    row.push(cell);
+                }
+            }
+            Event::End(TagEnd::Table) => {
+                *pos += 1;
+                break;
+            }
+            _ => {
+                *pos += 1;
+            }
+        }
+    }
+    Block::Table {
+        headers,
+        alignments,
+        rows,
+    }
+}
+
+// ── Utility functions ───────────────────────────────────────────────────────
 
 /// Collect raw text from events until the matching End tag.
 fn collect_text(events: &[Event], pos: &mut usize) -> String {
@@ -517,24 +428,6 @@ fn skip_to_end(events: &[Event], pos: &mut usize) {
         }
         *pos += 1;
     }
-}
-
-fn inlines_to_text(inlines: &[Inline]) -> String {
-    let mut s = String::new();
-    for i in inlines {
-        match i {
-            Inline::Text(t) => s.push_str(t),
-            Inline::Code(c) | Inline::Math(c) => s.push_str(c),
-            Inline::Bold(ch) | Inline::Italic(ch) | Inline::Strikethrough(ch) => {
-                s.push_str(&inlines_to_text(ch))
-            }
-            Inline::Link { text, .. } => s.push_str(&inlines_to_text(text)),
-            Inline::SoftBreak => s.push(' '),
-            Inline::HardBreak => s.push('\n'),
-            _ => {}
-        }
-    }
-    s
 }
 
 fn heading_to_u8(level: HeadingLevel) -> u8 {
@@ -624,5 +517,71 @@ $$
     fn table() {
         let doc = parse_markdown("| A | B |\n|---|---|\n| 1 | 2 |");
         assert!(matches!(&doc.blocks[0], Block::Table { .. }));
+    }
+
+    #[test]
+    fn bold_paragraph() {
+        let doc = parse_markdown("**bold text**");
+        if let Block::Paragraph { content } = &doc.blocks[0] {
+            assert!(content.iter().any(|i| matches!(i, Inline::Bold(_))));
+        } else {
+            panic!("Expected Paragraph with Bold inline");
+        }
+    }
+
+    #[test]
+    fn nested_formatting() {
+        let doc = parse_markdown("***bold italic***");
+        if let Block::Paragraph { content } = &doc.blocks[0] {
+            // pulldown_cmark nests emphasis inside strong (or vice versa)
+            let has_nested = content.iter().any(|i| match i {
+                Inline::Bold(ch) => ch.iter().any(|c| matches!(c, Inline::Italic(_))),
+                Inline::Italic(ch) => ch.iter().any(|c| matches!(c, Inline::Bold(_))),
+                _ => false,
+            });
+            assert!(
+                has_nested,
+                "Expected nested bold/italic, got: {:?}",
+                content
+            );
+        } else {
+            panic!("Expected Paragraph");
+        }
+    }
+
+    #[test]
+    fn link() {
+        let doc = parse_markdown("[click here](https://example.com)");
+        if let Block::Paragraph { content } = &doc.blocks[0] {
+            assert!(content.iter().any(|i| matches!(i, Inline::Link { .. })));
+        } else {
+            panic!("Expected Paragraph with Link");
+        }
+    }
+
+    #[test]
+    fn blockquote() {
+        let doc = parse_markdown("> quoted text");
+        assert!(matches!(&doc.blocks[0], Block::Quote { .. }));
+    }
+
+    #[test]
+    fn thematic_break() {
+        let doc = parse_markdown("---");
+        assert!(matches!(&doc.blocks[0], Block::ThematicBreak));
+    }
+
+    #[test]
+    fn strikethrough() {
+        let doc = parse_markdown("~~deleted~~");
+        if let Block::Paragraph { content } = &doc.blocks[0] {
+            assert!(
+                content
+                    .iter()
+                    .any(|i| matches!(i, Inline::Strikethrough(_)))
+            );
+        } else {
+            panic!("Expected Paragraph with Strikethrough");
+        }
     }
 }
