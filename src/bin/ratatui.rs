@@ -1,12 +1,14 @@
 use anyhow::Result;
 use clap::Parser;
-use iocraft::prelude::*;
 use std::fs;
 use std::io::{IsTerminal, Read, stdin};
 use std::path::PathBuf;
+
 mod assets;
 mod document;
 mod output;
+mod render;
+mod viewer;
 
 #[derive(Parser)]
 #[command(
@@ -63,50 +65,13 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    smol::block_on(element!(App(file_path, content)).render_loop())?;
-    Ok(())
-}
+    // Theme selection
+    let theme = match cli.theme.as_str() {
+        "light" => render::theme::Theme::light(),
+        _ => render::theme::Theme::dark(),
+    };
 
-#[derive(Default, Props)]
-struct AppProps {
-    file_path: Option<PathBuf>,
-    content: String,
-}
-
-#[component]
-fn App(props: &AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
-    let mut system = hooks.use_context_mut::<SystemContext>();
-    let mut should_exit = hooks.use_state(|| false);
-    let (stdout_handle, _) = hooks.use_output();
-
-    let path = props.file_path.clone().unwrap_or_default();
-    let path_name = path.to_str().unwrap_or_default();
-
-    hooks.use_terminal_events(move |event| match event {
-        TerminalEvent::Key(KeyEvent { code, kind, .. }) if kind != KeyEventKind::Release => {
-            match code {
-                KeyCode::Char('q') | KeyCode::Esc => should_exit.set(true),
-                _ => {}
-            }
-        }
-        _ => {}
-    });
-
-    if should_exit.get() {
-        system.exit();
-    }
-
-    element! {
-        View(flex_direction: FlexDirection::Column, padding: 1) {
-            View(border_style: BorderStyle::Round, border_color: Color::Green) {
-                Text(content: "RIVAS APP", color: Color::Green)
-            }
-            View(margin_top: 1) {
-                Text(content: format!("The file in {path_name} will be worked on."), color: Color::DarkGrey)
-            }
-            View(margin_top: 1) {
-                Text(content: "Press q to quit", color: Color::DarkBlue)
-            }
-        }
-    }
+    // Initialize and run viewer
+    let mut viewer = viewer::Viewer::new(content, file_path, theme)?;
+    viewer.run()
 }
