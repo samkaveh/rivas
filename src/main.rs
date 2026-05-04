@@ -5,8 +5,11 @@ use std::fs;
 use std::io::{IsTerminal, Read, stdin};
 use std::path::PathBuf;
 mod assets;
+mod components;
 mod document;
 mod output;
+
+use crate::components::document::{Document, DocumentProps};
 
 #[derive(Parser)]
 #[command(
@@ -63,24 +66,25 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    smol::block_on(element!(App(file_path, content)).render_loop())?;
+    smol::block_on(element!(App(file_path, content: content.as_str())).render_loop())?;
     Ok(())
 }
 
 #[derive(Default, Props)]
-struct AppProps {
+struct AppProps<'a> {
     file_path: Option<PathBuf>,
-    content: String,
+    content: &'a str,
 }
 
 #[component]
-fn App(props: &AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let mut system = hooks.use_context_mut::<SystemContext>();
     let mut should_exit = hooks.use_state(|| false);
     let (stdout_handle, _) = hooks.use_output();
 
     let path = props.file_path.clone().unwrap_or_default();
     let path_name = path.to_str().unwrap_or_default();
+    let content = props.content;
 
     hooks.use_terminal_events(move |event| match event {
         TerminalEvent::Key(KeyEvent { code, kind, .. }) if kind != KeyEventKind::Release => {
@@ -101,6 +105,7 @@ fn App(props: &AppProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
             View(border_style: BorderStyle::Round, border_color: Color::Green) {
                 Text(content: "RIVAS APP", color: Color::Green)
             }
+            Document(content)
             View(margin_top: 1) {
                 Text(content: format!("The file in {path_name} will be worked on."), color: Color::DarkGrey)
             }
