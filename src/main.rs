@@ -66,7 +66,7 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    smol::block_on(element!(App(file_path, content: content.as_str())).render_loop())?;
+    smol::block_on(element!(App(file_path, content: content.as_str())).fullscreen())?;
     Ok(())
 }
 
@@ -78,18 +78,19 @@ struct AppProps<'a> {
 
 #[component]
 fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let (width, height) = hooks.use_terminal_size();
     let mut system = hooks.use_context_mut::<SystemContext>();
     let mut should_exit = hooks.use_state(|| false);
-    let (stdout_handle, _) = hooks.use_output();
-
     let path = props.file_path.clone().unwrap_or_default();
     let path_name = path.to_str().unwrap_or_default();
     let content = props.content;
+    let mut mouse_captured = hooks.use_state(|| false);
 
     hooks.use_terminal_events(move |event| match event {
         TerminalEvent::Key(KeyEvent { code, kind, .. }) if kind != KeyEventKind::Release => {
             match code {
                 KeyCode::Char('q') | KeyCode::Esc => should_exit.set(true),
+                KeyCode::Char('m') => mouse_captured.set(true),
                 _ => {}
             }
         }
@@ -100,18 +101,13 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         system.exit();
     }
 
+    system.set_mouse_capture(mouse_captured.get());
+
+    let content_height = height.saturating_sub(2);
+
     element! {
-        View(flex_direction: FlexDirection::Column, padding: 1) {
-            View(border_style: BorderStyle::Round, border_color: Color::Green) {
-                Text(content: "RIVAS APP", color: Color::Green)
-            }
-            Document(content)
-            View(margin_top: 1) {
-                Text(content: format!("The file in {path_name} will be worked on."), color: Color::DarkGrey)
-            }
-            View(margin_top: 1) {
-                Text(content: "Press q to quit", color: Color::DarkBlue)
-            }
+        View(flex_direction: FlexDirection::Column,  width, height) {
+            Document(content: content, file_path: path, viewport_height: content_height as u32, viewport_width: width as u32 )
         }
     }
 }

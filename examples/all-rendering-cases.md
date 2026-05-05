@@ -1,3 +1,4 @@
+
 # Rivas Rendering Cases 🌱
 
 This file is a rendering fixture for the Markdown objects Rivas supports.
@@ -93,6 +94,8 @@ Before the rule.
 After the rule.
 
 ## Local Image
+
+![rivas image](../rivas.png)
 
 ![Seedling image](../seedling.png)
 
