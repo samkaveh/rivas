@@ -40,7 +40,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     let vh = props.viewport_height.unwrap_or(100);
 
     if data_cache.read().is_empty() {
-        let loaded_image = match render_mermaid_to_png(&props.source, vw) {
+        let loaded_image = match render_mermaid_to_png(&props.source, 2 * vw) {
             Ok(v) => v,
             Err(e) => {
                 return element! {

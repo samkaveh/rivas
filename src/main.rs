@@ -103,11 +103,9 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
 
     system.set_mouse_capture(mouse_captured.get());
 
-    let content_height = height.saturating_sub(2);
-
     element! {
         View(flex_direction: FlexDirection::Column,  width, height) {
-            Document(content: content, file_path: path, viewport_height: content_height as u32, viewport_width: width as u32 )
+            Document(content: content, file_path: path, viewport_height: height as u32, viewport_width: width as u32 )
         }
     }
 }

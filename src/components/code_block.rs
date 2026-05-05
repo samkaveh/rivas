@@ -47,7 +47,7 @@ pub fn CodeBlock(props: &CodeBlockProps, _hooks: Hooks) -> impl Into<AnyElement<
     }
 
     element! {
-        View(flex_direction: FlexDirection::Column, padding: 1, margin_bottom: 1, border_style: BorderStyle::Single) {
+        View(flex_direction: FlexDirection::Column, padding: 1, margin_bottom: 1, background_color: Color::Rgb{r: 26, g: 27, b: 30}) {
             View(margin_bottom: 1) {
                 Text(content: lang_label, color: Color::Blue)
             }
