@@ -83,7 +83,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
     let render_image =
         hooks.use_async_handler(move |(pos, visible): ((i32, i32), bool)| async move {
-            smol::Timer::after(Duration::from_millis(50)).await;
+            //smol::Timer::after(Duration::from_millis(10)).await;
 
             if !kitty::is_supported() {
                 return;
