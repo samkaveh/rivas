@@ -48,13 +48,22 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let mut rows = hooks.use_ref(|| 0u32);
 
     let url = &props.url;
-    let base_dir = &props.file_path;
+    let base_dir = props.file_path.parent();
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
 
     if data_cache.read().is_empty() {
-        let loaded_image = load_image_to_png(url.as_str(), Some(base_dir), vw).unwrap();
+        let loaded_image = match load_image_to_png(url.as_str(), base_dir, vw) {
+            Ok(v) => v,
+            Err(e) => {
+                return element! {
+                    View() {
+                        Text(content: format!("Error: {:#}, Base directory: {:?}", e, base_dir))
+                    }
+                };
+            }
+        };
         data_cache.set(loaded_image.0);
         let mut cols_ = loaded_image.1;
         let mut rows_ = loaded_image.2;
