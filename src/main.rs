@@ -1,14 +1,15 @@
 use anyhow::Result;
 use clap::Parser;
+use iocraft::prelude::*;
 use std::fs;
 use std::io::{IsTerminal, Read, stdin};
 use std::path::PathBuf;
-
 mod assets;
+mod components;
 mod document;
 mod output;
-mod render;
-mod viewer;
+
+use crate::components::document::Document;
 
 #[derive(Parser)]
 #[command(
@@ -65,13 +66,46 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    // Theme selection
-    let theme = match cli.theme.as_str() {
-        "light" => render::theme::Theme::light(),
-        _ => render::theme::Theme::dark(),
-    };
+    smol::block_on(element!(App(file_path, content: content.as_str())).fullscreen())?;
+    Ok(())
+}
 
-    // Initialize and run viewer
-    let mut viewer = viewer::Viewer::new(content, file_path, theme)?;
-    viewer.run()
+#[derive(Default, Props)]
+struct AppProps<'a> {
+    file_path: Option<PathBuf>,
+    content: &'a str,
+}
+
+#[component]
+fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let (width, height) = hooks.use_terminal_size();
+    let mut system = hooks.use_context_mut::<SystemContext>();
+    let mut should_exit = hooks.use_state(|| false);
+    let path = props.file_path.clone().unwrap_or_default();
+    let _path_name = path.to_str().unwrap_or_default();
+    let content = props.content;
+    let mut mouse_captured = hooks.use_state(|| false);
+
+    hooks.use_terminal_events(move |event| match event {
+        TerminalEvent::Key(KeyEvent { code, kind, .. }) if kind != KeyEventKind::Release => {
+            match code {
+                KeyCode::Char('q') | KeyCode::Esc => should_exit.set(true),
+                KeyCode::Char('m') => mouse_captured.set(true),
+                _ => {}
+            }
+        }
+        _ => {}
+    });
+
+    if should_exit.get() {
+        system.exit();
+    }
+
+    system.set_mouse_capture(mouse_captured.get());
+
+    element! {
+        View(flex_direction: FlexDirection::Column,  width, height) {
+            Document(content: content, file_path: path, viewport_height: height as u32, viewport_width: width as u32 )
+        }
+    }
 }

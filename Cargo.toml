@@ -1,6 +1,6 @@
 [package]
 name = "rivas"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [lib]
@@ -20,7 +20,6 @@ env_logger = "0.11.10"
 libc = "0.2.185"
 log = "0.4.29"
 pulldown-cmark = "0.13.3"
-ratatui = "0.30.0"
 syntect = "5.3.0"
 tiny-skia = "0.12.0"
 image = { version = "0.25", default-features = false, features = [
@@ -36,3 +35,5 @@ typst-assets = { version = "0.14.2", features = ["fonts"] }
 typst-svg = "0.14.2"
 regex = "1.12.3"
 tylax = "0.3.5"
+iocraft = "0.8.2"
+smol = "2.0.2"
