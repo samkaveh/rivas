@@ -14,7 +14,7 @@ pub struct ImageProps {
 }
 
 #[component]
-pub fn Image(props: &ImageProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     element! {
         View(flex_direction: FlexDirection::Column, padding: 1) {
             #(props.title.clone().map(|title| element! {

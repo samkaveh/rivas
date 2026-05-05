@@ -9,7 +9,7 @@ mod components;
 mod document;
 mod output;
 
-use crate::components::document::{Document, DocumentProps};
+use crate::components::document::Document;
 
 #[derive(Parser)]
 #[command(
@@ -82,7 +82,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let mut system = hooks.use_context_mut::<SystemContext>();
     let mut should_exit = hooks.use_state(|| false);
     let path = props.file_path.clone().unwrap_or_default();
-    let path_name = path.to_str().unwrap_or_default();
+    let _path_name = path.to_str().unwrap_or_default();
     let content = props.content;
     let mut mouse_captured = hooks.use_state(|| false);
 
