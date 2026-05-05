@@ -11,3 +11,4 @@ pub mod table_block;
 pub mod thematic_break;
 pub mod html_block;
 pub mod inline_renderer;
+pub mod blocks_renderer;

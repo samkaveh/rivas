@@ -1,14 +1,20 @@
 use iocraft::prelude::*;
-use crate::document::model::{Inline, inlines_to_text};
+use crate::document::model::Inline;
+use crate::components::image::KittyImage;
+use crate::components::math_block::KittyMath;
+use std::path::PathBuf;
 
-/// Renders a list of inlines into a Vec of (text, color, bold, italic) tuples for styling
-pub fn render_inlines_styled(
+/// Renders a list of inlines into a Vec of AnyElement for display
+pub fn render_inlines(
     inlines: &[Inline],
     base_color: Color,
-) -> Vec<(String, Color, bool, bool)> {
-    let mut spans = Vec::new();
-    render_inlines_recursive(inlines, base_color, false, false, &mut spans);
-    spans
+    file_path: &PathBuf,
+    viewport_height: Option<u32>,
+    viewport_width: Option<u32>,
+) -> Vec<AnyElement<'static>> {
+    let mut elements = Vec::new();
+    render_inlines_recursive(inlines, base_color, false, false, file_path, viewport_height, viewport_width, &mut elements);
+    elements
 }
 
 fn render_inlines_recursive(
@@ -16,59 +22,51 @@ fn render_inlines_recursive(
     color: Color,
     bold: bool,
     italic: bool,
-    out: &mut Vec<(String, Color, bool, bool)>,
+    file_path: &PathBuf,
+    viewport_height: Option<u32>,
+    viewport_width: Option<u32>,
+    out: &mut Vec<AnyElement<'static>>,
 ) {
     for inline in inlines {
         match inline {
             Inline::Text(t) => {
-                out.push((t.clone(), color, bold, italic));
+                out.push(element! { Text(content: t.clone(), color: color) }.into_any());
             }
             Inline::Bold(ch) => {
-                render_inlines_recursive(ch, color, true, italic, out);
+                // Approximate bold with Cyan if base is white, or just pass down
+                let next_color = if color == Color::White { Color::Cyan } else { color };
+                render_inlines_recursive(ch, next_color, true, italic, file_path, viewport_height, viewport_width, out);
             }
             Inline::Italic(ch) => {
-                render_inlines_recursive(ch, color, bold, true, out);
+                render_inlines_recursive(ch, color, bold, true, file_path, viewport_height, viewport_width, out);
             }
             Inline::Strikethrough(ch) => {
-                render_inlines_recursive(ch, color, bold, italic, out);
+                render_inlines_recursive(ch, color, bold, italic, file_path, viewport_height, viewport_width, out);
             }
             Inline::Code(c) => {
-                out.push((format!(" {} ", c), Color::Green, bold, italic));
+                out.push(element! { Text(content: format!(" {} ", c), color: Color::Green) }.into_any());
             }
             Inline::Link { text, url, .. } => {
-                let label = inlines_to_text(text);
-                out.push((format!("{} ({})", label, url), Color::Blue, bold, italic));
+                render_inlines_recursive(text, Color::Blue, bold, italic, file_path, viewport_height, viewport_width, out);
+                out.push(element! { Text(content: format!(" ({})", url), color: Color::DarkGrey) }.into_any());
             }
             Inline::SoftBreak => {
-                out.push((" ".to_string(), color, bold, italic));
+                out.push(element! { Text(content: " ".to_string(), color: color) }.into_any());
             }
             Inline::HardBreak => {
-                out.push(("\n".to_string(), color, bold, italic));
+                out.push(element! { Text(content: "\n".to_string(), color: color) }.into_any());
             }
             Inline::Math(m) => {
-                let cleaned = m.replace('\r', "").replace('\n', " ");
-                out.push((format!("${cleaned}$"), color, true, italic));
+                out.push(element! {
+                    KittyMath(content: m.clone(), display: false, viewport_height: viewport_height, viewport_width: viewport_width)
+                }.into_any());
             }
-            Inline::Image { alt, .. } => {
-                out.push((format!("[{}]", alt), Color::Yellow, bold, italic));
+            Inline::Image { alt: _, url } => {
+                // For inline images, we use KittyImage directly without block margins
+                out.push(element! {
+                    KittyImage(url: url.clone(), file_path: file_path.clone(), viewport_height: viewport_height, viewport_width: viewport_width)
+                }.into_any());
             }
         }
     }
-}
-
-/// Create iocraft text elements from styled inlines
-pub fn create_styled_text_elements(
-    styled_inlines: &[(String, Color, bool, bool)],
-) -> Vec<AnyElement<'static>> {
-    styled_inlines
-        .iter()
-        .map(|(text, color, bold, _italic)| {
-            // Note: iocraft may not support italic in Text component, but bold can be approximated
-            // by using higher contrast color or separate styling if available
-            element! {
-                Text(content: text.clone(), color: *color)
-            }
-            .into_any()
-        })
-        .collect()
 }

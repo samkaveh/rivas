@@ -1,7 +1,7 @@
 use crate::output::kitty;
 use crate::{assets::images::load_image_to_png, output::capabilities::TermCaps};
 use iocraft::prelude::*;
-use std::{io::Write, path::PathBuf, time::Duration};
+use std::{io::Write, path::PathBuf};
 
 #[derive(Default, Props)]
 pub struct ImageProps {
