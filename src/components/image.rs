@@ -119,5 +119,5 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         }
     }
 
-    element! {View(width: cols.read().clone(), height: rows.read().clone()){Text(content: format!("{cols}x{rows}"))}}
+    element! {View(width: cols.read().clone(), height: rows.read().clone())}
 }

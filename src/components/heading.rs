@@ -25,6 +25,7 @@ pub fn Heading(props: &HeadingProps, _hooks: Hooks) -> impl Into<AnyElement<'sta
     let styled_elements = render_inlines(
         &props.content, 
         color, 
+        true,
         &props.file_path, 
         props.viewport_height, 
         props.viewport_width

@@ -8,12 +8,13 @@ use std::path::PathBuf;
 pub fn render_inlines(
     inlines: &[Inline],
     base_color: Color,
+    bold: bool,
     file_path: &PathBuf,
     viewport_height: Option<u32>,
     viewport_width: Option<u32>,
 ) -> Vec<AnyElement<'static>> {
     let mut elements = Vec::new();
-    render_inlines_recursive(inlines, base_color, false, false, file_path, viewport_height, viewport_width, &mut elements);
+    render_inlines_recursive(inlines, base_color, bold, false, file_path, viewport_height, viewport_width, &mut elements);
     elements
 }
 
@@ -30,12 +31,16 @@ fn render_inlines_recursive(
     for inline in inlines {
         match inline {
             Inline::Text(t) => {
-                out.push(element! { Text(content: t.clone(), color: color) }.into_any());
+                out.push(element! { 
+                    Text(
+                        content: t.clone(), 
+                        color: color, 
+                        weight: if bold { Weight::Bold } else { Weight::Normal }
+                    ) 
+                }.into_any());
             }
             Inline::Bold(ch) => {
-                // Approximate bold with Cyan if base is white, or just pass down
-                let next_color = if color == Color::White { Color::Cyan } else { color };
-                render_inlines_recursive(ch, next_color, true, italic, file_path, viewport_height, viewport_width, out);
+                render_inlines_recursive(ch, color, true, italic, file_path, viewport_height, viewport_width, out);
             }
             Inline::Italic(ch) => {
                 render_inlines_recursive(ch, color, bold, true, file_path, viewport_height, viewport_width, out);

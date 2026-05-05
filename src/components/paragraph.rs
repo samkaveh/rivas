@@ -16,6 +16,7 @@ pub fn Paragraph(props: &ParagraphProps, _hooks: Hooks) -> impl Into<AnyElement<
     let styled_elements = render_inlines(
         &props.content, 
         Color::White, 
+        false,
         &props.file_path, 
         props.viewport_height, 
         props.viewport_width
