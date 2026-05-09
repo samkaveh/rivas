@@ -66,19 +66,13 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
     let view_h = props.viewport_height.unwrap_or(999) as i32;
     let view_w = props.viewport_width.unwrap_or(999) as i32;
-
-    let render_image =
-        hooks.use_async_handler(move |(pos, visible): ((i32, i32), bool)| async move {
-            //smol::Timer::after(Duration::from_millis(10)).await;
-
+    let render_image = hooks.use_async_handler(
+        move |(pos, visible, vis_cols, vis_rows): ((i32, i32), bool, i32, i32)| async move {
             if !kitty::is_supported() {
                 return;
             }
-
             let mut stdout = std::io::stdout().lock();
-
             kitty::delete_by_id(&mut stdout, image_id);
-
             if visible && !data_cache.read().is_empty() {
                 let (x, y) = pos;
                 write!(stdout, "\x1b7").unwrap();
@@ -86,24 +80,31 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
                 kitty::write_to(
                     &mut stdout,
                     &data_cache.read(),
-                    cols.read().clone(),
-                    rows.read().clone(),
+                    vis_cols as u32, // clipped
+                    vis_rows as u32, // clipped
                 );
                 write!(stdout, "\x1b8").unwrap();
             }
-
             stdout.flush().unwrap();
-        });
-
+        },
+    );
     if let Some(r) = rect {
         let pos = (r.left, r.top);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
-            let visible = pos.0 >= 0 && pos.1 >= 0 && pos.1 <= view_h && pos.0 <= view_w;
-            render_image((pos, visible));
+            let (x, y) = pos;
+            let img_cols = *cols.read() as i32;
+            let img_rows = *rows.read() as i32;
+
+            // How many cols/rows are actually visible
+            let visible_cols = (img_cols).min(view_w - x).max(0);
+            let visible_rows = (img_rows).min(view_h - y - 1).max(0);
+
+            let visible = x >= 0 && y >= 0 && visible_cols > 0 && visible_rows > 0;
+
+            render_image((pos, visible, visible_cols, visible_rows));
         }
     }
-
     element! {View(width: cols.read().clone(), height: rows.read().clone())}
 }

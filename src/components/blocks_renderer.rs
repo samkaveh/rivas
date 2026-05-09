@@ -1,17 +1,17 @@
-use iocraft::prelude::*;
-use std::path::PathBuf;
-use crate::document::model::Block;
-use crate::components::heading::Heading;
-use crate::components::paragraph::Paragraph;
 use crate::components::code_block::CodeBlock;
-use crate::components::mermaid_block::MermaidBlock;
-use crate::components::math_block::MathBlock;
-use crate::components::quote_block::QuoteBlock;
+use crate::components::heading::Heading;
+use crate::components::html_block::HtmlBlock;
+use crate::components::image::Image;
 use crate::components::list_block::ListBlock;
+use crate::components::math_block::MathBlock;
+use crate::components::mermaid_block::MermaidBlock;
+use crate::components::paragraph::Paragraph;
+use crate::components::quote_block::QuoteBlock;
 use crate::components::table_block::TableBlock;
 use crate::components::thematic_break::ThematicBreak;
-use crate::components::image::Image;
-use crate::components::html_block::HtmlBlock;
+use crate::document::model::Block;
+use iocraft::prelude::*;
+use std::path::PathBuf;
 
 #[derive(Default, Props)]
 pub struct BlocksRendererProps {
@@ -22,7 +22,10 @@ pub struct BlocksRendererProps {
 }
 
 #[component]
-pub fn BlocksRenderer(props: &BlocksRendererProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
+pub fn BlocksRenderer(
+    props: &BlocksRendererProps,
+    _hooks: Hooks,
+) -> impl Into<AnyElement<'static>> {
     let blocks = props.blocks.clone();
     let file_path = props.file_path.clone();
     let vh = props.viewport_height;

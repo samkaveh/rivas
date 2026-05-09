@@ -1,7 +1,7 @@
+use crate::components::inline_renderer::render_inlines;
+use crate::document::model::Inline;
 use iocraft::prelude::*;
 use std::path::PathBuf;
-use crate::document::model::Inline;
-use crate::components::inline_renderer::render_inlines;
 
 #[derive(Default, Props)]
 pub struct ParagraphProps {
@@ -14,12 +14,12 @@ pub struct ParagraphProps {
 #[component]
 pub fn Paragraph(props: &ParagraphProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let styled_elements = render_inlines(
-        &props.content, 
-        Color::White, 
+        &props.content,
+        Color::White,
         false,
-        &props.file_path, 
-        props.viewport_height, 
-        props.viewport_width
+        &props.file_path,
+        props.viewport_height,
+        props.viewport_width,
     );
 
     element! {

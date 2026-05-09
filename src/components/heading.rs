@@ -1,7 +1,7 @@
+use crate::components::inline_renderer::render_inlines;
+use crate::document::model::Inline;
 use iocraft::prelude::*;
 use std::path::PathBuf;
-use crate::document::model::Inline;
-use crate::components::inline_renderer::render_inlines;
 
 #[derive(Default, Props)]
 pub struct HeadingProps {
@@ -23,12 +23,12 @@ pub fn Heading(props: &HeadingProps, _hooks: Hooks) -> impl Into<AnyElement<'sta
     };
 
     let styled_elements = render_inlines(
-        &props.content, 
-        color, 
+        &props.content,
+        color,
         true,
-        &props.file_path, 
-        props.viewport_height, 
-        props.viewport_width
+        &props.file_path,
+        props.viewport_height,
+        props.viewport_width,
     );
 
     element! {

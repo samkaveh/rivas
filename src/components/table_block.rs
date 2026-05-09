@@ -1,7 +1,7 @@
+use crate::components::inline_renderer::render_inlines;
+use crate::document::model::{Alignment, TableCell};
 use iocraft::prelude::*;
 use std::path::PathBuf;
-use crate::document::model::{TableCell, Alignment};
-use crate::components::inline_renderer::render_inlines;
 
 #[derive(Default, Props)]
 pub struct TableBlockProps {
