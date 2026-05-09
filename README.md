@@ -2,7 +2,7 @@
 
 Rivas is a terminal Markdown viewer focused on rendering rich Markdown content
 directly in Kitty-compatible terminals. It parses Markdown, renders terminal
-text with Ratatui, and displays image-backed content through the Kitty graphics
+text with iocraft, and displays image-backed content through the Kitty graphics
 protocol.
 
 ## Features
@@ -14,7 +14,8 @@ protocol.
 - Local raster images.
 - Mermaid diagrams rendered to PNG.
 - LaTeX-style math rendered through MiTeX and Typst.
-- Dark and light themes.
+- Vim-style source editing with a side-by-side live preview.
+- Vim-style keyboard navigation in the rendered viewer.
 
 ## Requirements
 
@@ -47,6 +48,12 @@ Use the light theme:
 cargo run -- --theme light README.md
 ```
 
+Start directly in side-by-side edit mode:
+
+```sh
+cargo run -- --edit README.md
+```
+
 Use the rendering fixture:
 
 ```sh
@@ -55,51 +62,41 @@ cargo run -- examples/all-rendering-cases.md
 
 ## Editing
 
-Rivas can switch between rendered preview and Markdown source editing without
-leaving the terminal UI.
+Rivas can switch between rendered preview and side-by-side Markdown editing
+without leaving the terminal UI.
 
-Preview mode:
+Rendered viewer mode:
 
-- `e` or `Enter`: edit the Markdown source in place.
-- `s`: open side-by-side editing with source on the left and preview on the right.
+- `e`: enter side-by-side edit mode.
 - `j` / `Down`: scroll down.
 - `k` / `Up`: scroll up.
-- `Space` / `PageDown`: scroll down by one page.
-- `PageUp`: scroll up by one page.
-- `g` / `Home`: jump to the top.
+- `Ctrl-D`: scroll down by half a page.
+- `Ctrl-U`: scroll up by half a page.
+- `Ctrl-F`, `Space`, or `PageDown`: scroll down by one page.
+- `Ctrl-B` or `PageUp`: scroll up by one page.
+- `gg` / `Home`: jump to the top.
 - `G` / `End`: jump to the bottom.
 - `q` / `Esc`: quit.
 
-Edit modes:
+Side-by-side edit mode:
 
-- Rivas uses a small Vim-like normal/insert model.
-- `i`: enter insert mode at the cursor.
-- `a`: enter insert mode after the cursor.
-- `o`: open a new line below and enter insert mode.
-- `O`: open a new line above and enter insert mode.
-- `Esc`: leave insert mode. Press `Esc` again from normal mode to return to preview.
-- In insert mode, type normally to edit the document.
-- In normal mode, `h`, `j`, `k`, and `l` move left, down, up, and right.
-- Arrow keys, `Home`, `End`, `PageUp`, and `PageDown` also move the cursor.
-- `gg`: jump to the top.
-- `G`: jump to the bottom.
-- `0`: move to the start of the line.
-- `$`: move to the end of the line.
-- `Ctrl-U` / `Ctrl-D`: move up or down by half a page.
-- `x`: delete the character under the cursor.
-- `dd`: delete the current line.
-- `Tab`: insert four spaces in insert mode.
-- `Ctrl-S`: save changes to the opened file.
-- `F2`: switch to in-place editing.
-- `F3`: switch to side-by-side editing.
-- `Ctrl-Q`: quit without saving.
+- The source editor is on the left and the rendered preview is on the right.
+- The preview is rebuilt as edits happen, including images, math, and Mermaid diagrams.
+- The preview scrolls with the current source cursor line.
+- `:view`, `:render`, or `:preview`: return to rendered viewer mode.
+- `Esc`: leave insert, command, visual, or search mode inside the editor.
+- `:q`: quit the editor if there are no unsaved changes.
+- `:q!`: quit without saving.
+- `:w`: save changes.
+- `:wq` or `ZZ`: save and quit.
 
-In side-by-side mode, the preview is rebuilt as edits happen and its scroll
-position follows the source cursor.
+Editor normal mode supports Vim-style movement and editing, including `h/j/k/l`,
+`w/b/e`, `0`, `^`, `$`, `gg`, `G`, `{`, `}`, `i`, `a`, `o`, `O`, `v`, `d`, `c`,
+`y`, `p`, `P`, `u`, `Ctrl-R`, `/`, `?`, `n`, and `N`.
 
-Saving is only available when Rivas was opened with a file path. Markdown read
-from stdin can still be edited during the session, but there is no destination
-path to save to.
+Saving writes to the opened file path. Markdown read from stdin can still be
+edited during the session, but there is no durable destination unless you use a
+file path.
 
 ## Supported Markdown Notes
 

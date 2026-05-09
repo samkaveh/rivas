@@ -97,16 +97,20 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let content = hooks.use_state(|| props.content.to_string());
     let mut mouse_captured = hooks.use_state(|| false);
     let mut edit_mode = hooks.use_state(|| props.edit);
+    let editor_line = hooks.use_ref(|| 0usize);
 
     hooks.use_terminal_events(move |event| match event {
-        TerminalEvent::Key(KeyEvent { code, kind, .. }) if kind != KeyEventKind::Release => {
-            match code {
-                KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
-                KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
-                KeyCode::Char('m') => mouse_captured.set(true),
-                _ => {}
-            }
-        }
+        TerminalEvent::Key(KeyEvent {
+            code,
+            modifiers: _,
+            kind,
+            ..
+        }) if kind != KeyEventKind::Release => match code {
+            KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
+            KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
+            KeyCode::Char('m') => mouse_captured.set(true),
+            _ => {}
+        },
         _ => {}
     });
 
@@ -122,6 +126,12 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             content.set(next_content);
         }
     });
+    let on_view = hooks.use_async_handler(move |()| {
+        let mut edit_mode = edit_mode.clone();
+        async move {
+            edit_mode.set(false);
+        }
+    });
 
     if edit_mode.get() {
         let editor_width = (width / 2).max(1);
@@ -135,19 +145,21 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                         initial_content: current_content.clone(),
                         viewport_width: editor_width,
                         viewport_height: height,
-                        on_change
+                        on_change,
+                        cursor_ref: Some(editor_line),
+                        on_view
                     )
                 }
                 View(width: 1, height, background_color: Color::AnsiValue(238)) {}
                 View(width: preview_width.saturating_sub(1), height, overflow: Overflow::Hidden) {
-                    Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: preview_width.saturating_sub(1) as u32)
+                    Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line))
                 }
             }
         }
     } else {
         element! {
             View(flex_direction: FlexDirection::Column,  width, height) {
-                Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: width as u32 )
+                Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None)
             }
         }
     }

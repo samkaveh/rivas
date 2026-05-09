@@ -329,6 +329,7 @@ struct EditorState {
     pub message: String,
     last_search: String,
     search_forward: bool,
+    request_view: bool,
     pub view_height: usize,
     pub view_width: usize,
 }
@@ -356,6 +357,7 @@ impl EditorState {
             message: String::new(),
             last_search: String::new(),
             search_forward: true,
+            request_view: false,
             view_height: 20,
             view_width: 80,
         }
@@ -677,6 +679,10 @@ impl EditorState {
             "wq!" => {
                 let _ = std::fs::write(&self.filename, self.buf.to_text());
                 true
+            }
+            "view" | "render" | "preview" => {
+                self.request_view = true;
+                false
             }
             other => {
                 self.message = format!("E: Not an editor command: {}", other);
@@ -1486,6 +1492,8 @@ pub struct NvimEditorProps {
     pub viewport_width: u16,
     pub viewport_height: u16,
     pub on_change: Handler<String>,
+    pub cursor_ref: Option<Ref<usize>>,
+    pub on_view: Handler<()>,
 }
 
 #[component]
@@ -1502,61 +1510,71 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
     let tick: State<u64> = hooks.use_state(|| 0u64);
     let should_quit: State<bool> = hooks.use_state(|| false);
 
-    // use_async_handler: bridges sync terminal events into async tasks that
-    // can safely call tick.set() to request a re-render.
     let on_change = props.on_change.clone();
-    let on_event = hooks.use_async_handler({
-        let state_ref = state_ref.clone();
-        move |ev: TerminalEvent| {
-            let mut state_ref = state_ref.clone();
-            let mut tick = tick.clone();
-            let mut should_quit = should_quit.clone();
-            let on_change = on_change.clone();
-            async move {
-                if let TerminalEvent::Resize(w, h) = &ev {
-                    {
-                        if let Some(s) = state_ref.write().as_mut() {
-                            s.view_width = *w as usize;
-                            s.view_height = (*h as usize).saturating_sub(3);
-                        }
-                    }
+    let cursor_ref = props.cursor_ref;
+    let on_view = props.on_view.clone();
+    hooks.use_terminal_events({
+        let mut state_ref = state_ref.clone();
+        let mut tick = tick;
+        let mut should_quit = should_quit;
+        move |ev| {
+            if let TerminalEvent::Resize(w, h) = &ev {
+                if let Some(s) = state_ref.write().as_mut() {
+                    s.view_width = *w as usize;
+                    s.view_height = (*h as usize).saturating_sub(3);
+                }
+                tick.set(tick.get().wrapping_add(1));
+                return;
+            }
 
-                    tick.set(tick.get().wrapping_add(1));
-                }
-                if let TerminalEvent::Key(KeyEvent {
-                    code,
-                    modifiers,
-                    kind,
-                    ..
-                }) = ev
-                {
-                    if kind == KeyEventKind::Press {
-                        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-                        let (quit, new_content) = if let Some(s) = state_ref.write().as_mut() {
-                            let before_content = s.buf.to_text();
-                            let q = handle_key(s, code, ctrl);
-                            let after_content = s.buf.to_text();
-                            let changed = before_content != after_content;
-                            (q, changed.then_some(after_content))
-                        } else {
-                            (false, None)
-                        };
-                        if let Some(content) = new_content {
-                            on_change(content);
-                        }
-                        if quit {
-                            should_quit.set(true);
-                        } else {
-                            tick.set(tick.get().wrapping_add(1));
-                        }
-                    }
-                }
+            let TerminalEvent::Key(KeyEvent {
+                code,
+                modifiers,
+                kind,
+                ..
+            }) = ev
+            else {
+                return;
+            };
+
+            if kind != KeyEventKind::Press {
+                return;
+            }
+
+            let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+            let (quit, new_content, cursor_row, request_view) =
+                if let Some(s) = state_ref.write().as_mut() {
+                    let before_content = s.buf.to_text();
+                    let q = handle_key(s, code, ctrl);
+                    let after_content = s.buf.to_text();
+                    let changed = before_content != after_content;
+                    let request_view = s.request_view;
+                    s.request_view = false;
+                    (
+                        q,
+                        changed.then_some(after_content),
+                        Some(s.row),
+                        request_view,
+                    )
+                } else {
+                    (false, None, None, false)
+                };
+
+            if let Some(content) = new_content {
+                on_change(content);
+            }
+            if let (Some(mut cursor_ref), Some(row)) = (cursor_ref, cursor_row) {
+                cursor_ref.set(row);
+            }
+            if request_view {
+                on_view(());
+            }
+            if quit {
+                should_quit.set(true);
+            } else {
+                tick.set(tick.get().wrapping_add(1));
             }
         }
-    });
-
-    hooks.use_terminal_events(move |ev| {
-        on_event(ev);
     });
 
     let mut system = hooks.use_context_mut::<SystemContext>();
