@@ -1,6 +1,7 @@
 pub mod blocks_renderer;
 pub mod code_block;
 pub mod document;
+pub mod editor;
 pub mod heading;
 pub mod html_block;
 pub mod image;

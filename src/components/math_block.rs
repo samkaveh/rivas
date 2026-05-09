@@ -32,6 +32,7 @@ pub struct KittyMathProps {
 #[component]
 pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let rect = hooks.use_component_rect();
+    let (term_width, term_height) = hooks.use_terminal_size();
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
     let image_id = hooks.use_state(|| kitty::next_placement_id()).get();
     let mut data_cache = hooks.use_ref(|| Vec::<u8>::new());
@@ -66,8 +67,6 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
         rows.set(rows_);
     }
 
-    let view_h = props.viewport_height.unwrap_or(999) as i32;
-    let view_w = props.viewport_width.unwrap_or(999) as i32;
     let render_image = hooks.use_async_handler(
         move |(pos, visible, vis_cols, vis_rows): ((i32, i32), bool, i32, i32)| async move {
             if !kitty::is_supported() {
@@ -95,13 +94,12 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
-            let (x, y) = pos;
             let img_cols = *cols.read() as i32;
             let img_rows = *rows.read() as i32;
 
-            // How many cols/rows are actually visible
-            let visible_cols = (img_cols).min(view_w - x).max(0);
-            let visible_rows = (img_rows).min(view_h - y - 1).max(0); // 1 unit as bottom-margin
+            let (x, y) = pos;
+            let visible_cols = img_cols.min(term_width as i32 - x).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
 
             let visible = x >= 0 && y >= 0 && visible_cols > 0 && visible_rows > 0;
 

@@ -10,6 +10,7 @@ mod document;
 mod output;
 
 use crate::components::document::Document;
+use crate::components::editor::NvimEditor;
 
 #[derive(Parser)]
 #[command(
@@ -22,6 +23,9 @@ struct Cli {
     /// Theme: dark, light
     #[arg(short, long, default_value = "dark")]
     theme: String,
+    /// Open a side-by-side markdown editor and live preview.
+    #[arg(short, long)]
+    edit: bool,
 }
 
 fn main() -> Result<()> {
@@ -66,7 +70,9 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    smol::block_on(element!(App(file_path, content: content.as_str())).fullscreen())?;
+    smol::block_on(
+        element!(App(file_path, content: content.as_str(), edit: cli.edit)).fullscreen(),
+    )?;
     Ok(())
 }
 
@@ -74,6 +80,7 @@ fn main() -> Result<()> {
 struct AppProps<'a> {
     file_path: Option<PathBuf>,
     content: &'a str,
+    edit: bool,
 }
 
 #[component]
@@ -82,14 +89,20 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let mut system = hooks.use_context_mut::<SystemContext>();
     let mut should_exit = hooks.use_state(|| false);
     let path = props.file_path.clone().unwrap_or_default();
-    let _path_name = path.to_str().unwrap_or_default();
-    let content = props.content;
+    let path_name = path
+        .to_str()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("untitled.md")
+        .to_string();
+    let content = hooks.use_state(|| props.content.to_string());
     let mut mouse_captured = hooks.use_state(|| false);
+    let mut edit_mode = hooks.use_state(|| props.edit);
 
     hooks.use_terminal_events(move |event| match event {
         TerminalEvent::Key(KeyEvent { code, kind, .. }) if kind != KeyEventKind::Release => {
             match code {
-                KeyCode::Char('q') | KeyCode::Esc => should_exit.set(true),
+                KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
+                KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
                 KeyCode::Char('m') => mouse_captured.set(true),
                 _ => {}
             }
@@ -102,10 +115,40 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     }
 
     system.set_mouse_capture(mouse_captured.get());
+    let current_content = content.read().clone();
+    let on_change = hooks.use_async_handler(move |next_content: String| {
+        let mut content = content.clone();
+        async move {
+            content.set(next_content);
+        }
+    });
 
-    element! {
-        View(flex_direction: FlexDirection::Column,  width, height) {
-            Document(content: content, file_path: path, viewport_height: height as u32, viewport_width: width as u32 )
+    if edit_mode.get() {
+        let editor_width = (width / 2).max(1);
+        let preview_width = width.saturating_sub(editor_width).max(1);
+
+        element! {
+            View(flex_direction: FlexDirection::Row, width, height) {
+                View(width: editor_width, height, overflow: Overflow::Hidden) {
+                    NvimEditor(
+                        filename: path_name,
+                        initial_content: current_content.clone(),
+                        viewport_width: editor_width,
+                        viewport_height: height,
+                        on_change
+                    )
+                }
+                View(width: 1, height, background_color: Color::AnsiValue(238)) {}
+                View(width: preview_width.saturating_sub(1), height, overflow: Overflow::Hidden) {
+                    Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: preview_width.saturating_sub(1) as u32)
+                }
+            }
+        }
+    } else {
+        element! {
+            View(flex_direction: FlexDirection::Column,  width, height) {
+                Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: width as u32 )
+            }
         }
     }
 }
