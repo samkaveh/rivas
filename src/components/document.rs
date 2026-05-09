@@ -29,9 +29,9 @@ pub fn Document(props: &DocumentProps, _hooks: Hooks) -> impl Into<AnyElement<'s
                 ScrollView {
                     View(flex_direction:FlexDirection::Column, padding: 1){
                         BlocksRenderer(
-                            blocks: doc.blocks, 
-                            file_path: file_path, 
-                            viewport_height: vh, 
+                            blocks: doc.blocks,
+                            file_path: file_path,
+                            viewport_height: vh,
                             viewport_width: vw
                         )
                     }
