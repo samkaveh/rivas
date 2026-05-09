@@ -10,6 +10,7 @@ mod document;
 mod output;
 
 use crate::components::document::Document;
+use crate::components::editor::NvimEditor;
 
 #[derive(Parser)]
 #[command(
@@ -22,6 +23,9 @@ struct Cli {
     /// Theme: dark, light
     #[arg(short, long, default_value = "dark")]
     theme: String,
+    /// Open a side-by-side markdown editor and live preview.
+    #[arg(short, long)]
+    edit: bool,
 }
 
 fn main() -> Result<()> {
@@ -66,7 +70,9 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    smol::block_on(element!(App(file_path, content: content.as_str())).fullscreen())?;
+    smol::block_on(
+        element!(App(file_path, content: content.as_str(), edit: cli.edit)).fullscreen(),
+    )?;
     Ok(())
 }
 
@@ -74,6 +80,7 @@ fn main() -> Result<()> {
 struct AppProps<'a> {
     file_path: Option<PathBuf>,
     content: &'a str,
+    edit: bool,
 }
 
 #[component]
@@ -82,18 +89,28 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let mut system = hooks.use_context_mut::<SystemContext>();
     let mut should_exit = hooks.use_state(|| false);
     let path = props.file_path.clone().unwrap_or_default();
-    let _path_name = path.to_str().unwrap_or_default();
-    let content = props.content;
+    let path_name = path
+        .to_str()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("untitled.md")
+        .to_string();
+    let content = hooks.use_state(|| props.content.to_string());
     let mut mouse_captured = hooks.use_state(|| false);
+    let mut edit_mode = hooks.use_state(|| props.edit);
+    let editor_line = hooks.use_ref(|| 0usize);
 
     hooks.use_terminal_events(move |event| match event {
-        TerminalEvent::Key(KeyEvent { code, kind, .. }) if kind != KeyEventKind::Release => {
-            match code {
-                KeyCode::Char('q') | KeyCode::Esc => should_exit.set(true),
-                KeyCode::Char('m') => mouse_captured.set(true),
-                _ => {}
-            }
-        }
+        TerminalEvent::Key(KeyEvent {
+            code,
+            modifiers: _,
+            kind,
+            ..
+        }) if kind != KeyEventKind::Release => match code {
+            KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
+            KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
+            KeyCode::Char('m') => mouse_captured.set(true),
+            _ => {}
+        },
         _ => {}
     });
 
@@ -102,10 +119,57 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     }
 
     system.set_mouse_capture(mouse_captured.get());
+    let current_content = content.read().clone();
+    let on_change = hooks.use_async_handler(move |next_content: String| {
+        let mut content = content.clone();
+        async move {
+            content.set(next_content);
+        }
+    });
+    let on_view = hooks.use_async_handler(move |()| {
+        let mut edit_mode = edit_mode.clone();
+        async move {
+            edit_mode.set(false);
+        }
+    });
 
-    element! {
-        View(flex_direction: FlexDirection::Column,  width, height) {
-            Document(content: content, file_path: path, viewport_height: height as u32, viewport_width: width as u32 )
+    if edit_mode.get() {
+        let editor_width = (width / 2).max(1);
+        let preview_width = width.saturating_sub(editor_width).max(1);
+
+        element! {
+            View(flex_direction: FlexDirection::Row, width, height) {
+                View(width: editor_width, height, overflow: Overflow::Hidden) {
+                    NvimEditor(
+                        filename: path_name,
+                        initial_content: current_content.clone(),
+                        viewport_width: editor_width,
+                        viewport_height: height,
+                        on_change,
+                        cursor_ref: Some(editor_line),
+                        on_view
+                    )
+                }
+                View(width: 1, height, background_color: Color::AnsiValue(238)) {}
+                View(width: preview_width.saturating_sub(1), height, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
+                    Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line))
+                    View(width: 100pct, background_color: Color::AnsiValue(238)) {
+                        Text(content: " PREVIEW ", color: Color::AnsiValue(250), weight: Weight::Bold)
+                    }
+                    View(width: 100pct) {
+                        Text(content: " :view returns to rendered view ", color: Color::AnsiValue(242))
+                    }
+                    View(width: 100pct, background_color: Color::AnsiValue(234)) {
+                        Text(content: " live markdown preview ", color: Color::AnsiValue(242))
+                    }
+                }
+            }
+        }
+    } else {
+        element! {
+            View(flex_direction: FlexDirection::Column,  width, height) {
+                Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None)
+            }
         }
     }
 }

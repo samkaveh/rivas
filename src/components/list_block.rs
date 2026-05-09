@@ -32,7 +32,7 @@ pub fn ListBlock(props: &ListBlockProps, _hooks: Hooks) -> impl Into<AnyElement<
 
                 element! {
                     View(flex_direction: FlexDirection::Row) {
-                        View(width: 4) {
+                        View(width: 4, padding_top: 1) {
                             Text(content: format!("{} ", marker), color: Color::Yellow)
                         }
                         View(flex_grow: 1.0) {
