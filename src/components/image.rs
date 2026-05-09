@@ -45,6 +45,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
     let image_id = hooks.use_state(|| kitty::next_placement_id()).get();
     let mut data_cache = hooks.use_ref(|| Vec::<u8>::new());
+    let mut cache_key = hooks.use_ref(String::new);
     let mut cols = hooks.use_ref(|| 0u32);
     let mut rows = hooks.use_ref(|| 0u32);
 
@@ -53,6 +54,15 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
+    let key = format!("{}:{}", vw, url);
+
+    if *cache_key.read() != key {
+        cache_key.set(key);
+        data_cache.set(Vec::new());
+        cols.set(0);
+        rows.set(0);
+        drawn_at.set((-1, -1));
+    }
 
     if data_cache.read().is_empty() {
         let loaded_image = match load_image_to_png(url.as_str(), base_dir, vw) {

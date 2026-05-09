@@ -1,5 +1,5 @@
 use crate::components::inline_renderer::render_inlines;
-use crate::document::model::{Alignment, TableCell};
+use crate::document::model::{Alignment, TableCell, inlines_to_text};
 use iocraft::prelude::*;
 use std::path::PathBuf;
 
@@ -19,22 +19,48 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
     if ncols == 0 {
         return element! {
             View(padding: 1, margin_bottom: 1) {
-                Text(content: "Empty table".to_string(), color: Color::DarkGrey)
+                Text(content: "Empty table".to_string(), color: Color::AnsiValue(242))
             }
         }
         .into_any();
     }
 
+    let max_table_width = props
+        .viewport_width
+        .unwrap_or(100)
+        .saturating_sub(4)
+        .max(20);
+    let mut col_widths: Vec<u32> = props
+        .headers
+        .iter()
+        .map(|cell| inlines_to_text(&cell.content).chars().count() as u32 + 2)
+        .collect();
+
+    for row in &props.rows {
+        for (i, cell) in row.iter().enumerate().take(ncols) {
+            col_widths[i] =
+                col_widths[i].max(inlines_to_text(&cell.content).chars().count() as u32 + 2);
+        }
+    }
+
+    let max_col_width = (max_table_width / ncols as u32).max(4);
+    let min_col_width = max_col_width.min(6);
+    for width in &mut col_widths {
+        *width = (*width).clamp(min_col_width, max_col_width);
+    }
+    let table_width = col_widths.iter().sum::<u32>();
+
     element! {
         View(
             flex_direction: FlexDirection::Column,
             margin_bottom: 1,
-            border_style: BorderStyle::Round,
-            border_color: Color::Grey,
-            width: 100pct,
+            border_style: BorderStyle::Single,
+            border_color: Color::AnsiValue(238),
+            background_color: Color::AnsiValue(234),
+            width: table_width,
         ) {
             // Header Row
-            View(border_style: BorderStyle::Single, border_edges: Edges::Bottom, border_color: Color::Grey) {
+            View(flex_direction: FlexDirection::Row, border_style: BorderStyle::Single, border_edges: Edges::Bottom, border_color: Color::AnsiValue(238)) {
                 #(props.headers.iter().enumerate().map(|(i, cell)| {
                     let alignment = props.alignments.get(i).cloned().unwrap_or(Alignment::None);
                     let justify = match alignment {
@@ -43,7 +69,7 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                         Alignment::Right => JustifyContent::End,
                     };
                     element! {
-                        View(flex_grow: 1.0, width: 0pct, justify_content: justify, padding: 1) {
+                        View(width: col_widths[i], justify_content: justify, padding_left: 1, padding_right: 1) {
                             View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
                                 #(render_inlines(&cell.content, Color::Cyan, true, &props.file_path, props.viewport_height, props.viewport_width))
                             }
@@ -56,9 +82,10 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                 element! {
                     View(
                         flex_direction: FlexDirection::Row,
-                        background_color: if row_idx % 2 == 1 { Some(Color::Rgb{r: 35, g: 38, b: 52}) } else { None }
+                        background_color: if row_idx % 2 == 1 { Some(Color::AnsiValue(235)) } else { None }
                     ) {
-                        #(row.iter().enumerate().map(|(col_idx, cell)| {
+                        #((0..ncols).map(|col_idx| {
+                            let cell = row.get(col_idx).cloned().unwrap_or(TableCell { content: Vec::new() });
                             let alignment = props.alignments.get(col_idx).cloned().unwrap_or(Alignment::None);
                             let justify = match alignment {
                                 Alignment::Left | Alignment::None => JustifyContent::Start,
@@ -66,7 +93,7 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                                 Alignment::Right => JustifyContent::End,
                             };
                             element! {
-                                View(flex_grow: 1.0, width: 0pct, justify_content: justify, padding: 1) {
+                                View(width: col_widths[col_idx], justify_content: justify, padding_left: 1, padding_right: 1) {
                                     View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
                                         #(render_inlines(&cell.content, Color::White, false, &props.file_path, props.viewport_height, props.viewport_width))
                                     }

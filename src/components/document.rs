@@ -24,8 +24,8 @@ pub fn Document(props: &DocumentProps, _hooks: Hooks) -> impl Into<AnyElement<'s
     let file_path = props.file_path.clone();
 
     element! {
-    View(width: vw.unwrap_or(100), height: vh.unwrap_or(100), flex_direction: FlexDirection::Column, background_color: Color::Rgb{r: 26, g: 27, b: 38}) {
-        View(flex_grow: 1.0, border_style: BorderStyle::Single){
+    View(width: vw.unwrap_or(100), height: vh.unwrap_or(100), flex_direction: FlexDirection::Column, background_color: Color::AnsiValue(234)) {
+        View(flex_grow: 1.0, border_style: BorderStyle::Single, border_color: Color::AnsiValue(238)){
                 ScrollView {
                     View(flex_direction:FlexDirection::Column, padding: 1){
                         BlocksRenderer(
