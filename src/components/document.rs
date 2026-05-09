@@ -29,6 +29,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
 
     hooks.use_terminal_events({
         let mut scroll_handle = scroll_handle;
+        let content = content.clone();
         move |event| {
             let TerminalEvent::Key(KeyEvent {
                 code,
@@ -42,9 +43,23 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
 
             if !keyboard_navigation || kind == KeyEventKind::Release {
                 if let Some(follow_ref) = follow_ref {
+                    let current_line = follow_ref.get();
+                    let total_lines = content.lines().count().max(1);
                     let viewport_height = vh.unwrap_or(0) as i32;
-                    let offset = follow_ref.get() as i32 - (viewport_height / 3).max(0);
-                    scroll_handle.write().scroll_to(offset.max(0));
+                    let ch = scroll_handle.read().content_height() as i32;
+
+                    if current_line + 1 >= total_lines {
+                        scroll_handle.write().scroll_to_bottom();
+                    } else if current_line == 0 {
+                        scroll_handle.write().scroll_to_top();
+                    } else if ch > 0 {
+                        let proportion = current_line as f32 / total_lines as f32;
+                        let offset = (proportion * ch as f32) as i32 - (viewport_height / 3).max(0);
+                        scroll_handle.write().scroll_to(offset.max(0));
+                    } else {
+                        let offset = current_line as i32 - (viewport_height / 3).max(0);
+                        scroll_handle.write().scroll_to(offset.max(0));
+                    }
                 }
                 return;
             }
