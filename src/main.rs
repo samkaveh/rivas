@@ -151,8 +151,17 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     )
                 }
                 View(width: 1, height, background_color: Color::AnsiValue(238)) {}
-                View(width: preview_width.saturating_sub(1), height, overflow: Overflow::Hidden) {
-                    Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line))
+                View(width: preview_width.saturating_sub(1), height, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
+                    Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line))
+                    View(width: 100pct, background_color: Color::AnsiValue(238)) {
+                        Text(content: " PREVIEW ", color: Color::AnsiValue(250), weight: Weight::Bold)
+                    }
+                    View(width: 100pct) {
+                        Text(content: " :view returns to rendered view ", color: Color::AnsiValue(242))
+                    }
+                    View(width: 100pct, background_color: Color::AnsiValue(234)) {
+                        Text(content: " live markdown preview ", color: Color::AnsiValue(242))
+                    }
                 }
             }
         }
