@@ -16,8 +16,10 @@ pub fn is_supported() -> bool {
     false
 }
 
-pub fn write_to<W: Write>(w: &mut W, png_data: &[u8], cols: u32, rows: u32) {
-    write_with_id_to(w, png_data, cols, rows, next_placement_id());
+pub fn write_to<W: Write>(w: &mut W, png_data: &[u8], cols: u32, rows: u32) -> u32 {
+    let id = next_placement_id();
+    write_with_id_to(w, png_data, cols, rows, id);
+    id
 }
 
 static NEXT_PLACEMENT_ID: AtomicU32 = AtomicU32::new(1);

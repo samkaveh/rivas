@@ -34,7 +34,7 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     let rect = hooks.use_component_rect();
     let (term_width, term_height) = hooks.use_terminal_size();
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
-    let image_id = hooks.use_state(|| kitty::next_placement_id()).get();
+    let mut image_id = hooks.use_state(|| 0u32);
     let mut data_cache = hooks.use_ref(|| Vec::<u8>::new());
     let mut cache_key = hooks.use_ref(String::new);
     let mut cols = hooks.use_ref(|| 0u32);
@@ -83,17 +83,22 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
                 return;
             }
             let mut stdout = std::io::stdout().lock();
-            kitty::delete_by_id(&mut stdout, image_id);
+            let current_id = image_id.get();
+            if current_id != 0 {
+                kitty::delete_by_id(&mut stdout, current_id);
+                image_id.set(0);
+            }
             if visible && !data_cache.read().is_empty() {
                 let (x, y) = pos;
                 write!(stdout, "\x1b7").unwrap();
                 write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-                kitty::write_to(
+                let new_id = kitty::write_to(
                     &mut stdout,
                     &data_cache.read(),
                     vis_cols as u32, // clipped
                     vis_rows as u32, // clipped
                 );
+                image_id.set(new_id);
                 write!(stdout, "\x1b8").unwrap();
             }
             stdout.flush().unwrap();
