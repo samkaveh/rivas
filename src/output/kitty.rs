@@ -16,8 +16,10 @@ pub fn is_supported() -> bool {
     false
 }
 
-pub fn write_to<W: Write>(w: &mut W, png_data: &[u8], cols: u32, rows: u32) {
-    write_with_id_to(w, png_data, cols, rows, next_placement_id());
+pub fn write_to<W: Write>(w: &mut W, png_data: &[u8], cols: u32, rows: u32) -> u32 {
+    let id = next_placement_id();
+    write_with_id_to(w, png_data, cols, rows, id);
+    id
 }
 
 static NEXT_PLACEMENT_ID: AtomicU32 = AtomicU32::new(1);
@@ -61,4 +63,42 @@ pub fn delete_by_id<W: Write>(w: &mut W, id: u32) {
 
 pub fn delete_all<W: Write>(w: &mut W) {
     write!(w, "\x1b_Ga=d,d=a,q=2;\x1b\\").unwrap();
+}
+
+pub struct ImageGuard {
+    id: u32,
+}
+
+impl ImageGuard {
+    pub fn new() -> Self {
+        Self { id: 0 }
+    }
+
+    pub fn set(&mut self, id: u32) {
+        if self.id != 0 && self.id != id {
+            let mut stdout = std::io::stdout().lock();
+            delete_by_id(&mut stdout, self.id);
+            let _ = stdout.flush();
+        }
+        self.id = id;
+    }
+
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub fn clear(&mut self) {
+        if self.id != 0 {
+            let mut stdout = std::io::stdout().lock();
+            delete_by_id(&mut stdout, self.id);
+            let _ = stdout.flush();
+            self.id = 0;
+        }
+    }
+}
+
+impl Drop for ImageGuard {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
