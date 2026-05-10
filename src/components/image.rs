@@ -43,7 +43,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let rect = hooks.use_component_rect();
     let (term_width, term_height) = hooks.use_terminal_size();
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
-    let mut image_id = hooks.use_state(|| 0u32);
+    let mut image_id = hooks.use_ref(|| kitty::ImageGuard::new());
     let mut data_cache = hooks.use_ref(|| Vec::<u8>::new());
     let mut cache_key = hooks.use_ref(String::new);
     let mut cols = hooks.use_ref(|| 0u32);
@@ -95,11 +95,6 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                 return;
             }
             let mut stdout = std::io::stdout().lock();
-            let current_id = image_id.get();
-            if current_id != 0 {
-                kitty::delete_by_id(&mut stdout, current_id);
-                image_id.set(0);
-            }
             if visible && !data_cache.read().is_empty() {
                 let (x, y) = pos;
                 write!(stdout, "\x1b7").unwrap();
@@ -110,8 +105,10 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                     vis_cols as u32, // clipped
                     vis_rows as u32, // clipped
                 );
-                image_id.set(new_id);
+                image_id.write().set(new_id);
                 write!(stdout, "\x1b8").unwrap();
+            } else {
+                image_id.write().clear();
             }
             stdout.flush().unwrap();
         },

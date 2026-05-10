@@ -1,8 +1,9 @@
+use crate::output::kitty;
 use anyhow::Result;
 use clap::Parser;
 use iocraft::prelude::*;
 use std::fs;
-use std::io::{IsTerminal, Read, stdin};
+use std::io::{IsTerminal, Read, Write, stdin};
 use std::path::PathBuf;
 mod assets;
 mod components;
@@ -114,7 +115,27 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         _ => {}
     });
 
+    hooks.use_effect(
+        {
+            let edit_mode = edit_mode.get();
+            move || {
+                if !kitty::is_supported() {
+                    return;
+                }
+                let mut stdout = std::io::stdout().lock();
+                kitty::delete_all(&mut stdout);
+                let _ = stdout.flush();
+            }
+        },
+        edit_mode.get(),
+    );
+
     if should_exit.get() {
+        if kitty::is_supported() {
+            let mut stdout = std::io::stdout().lock();
+            kitty::delete_all(&mut stdout);
+            let _ = stdout.flush();
+        }
         system.exit();
     }
 
