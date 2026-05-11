@@ -1,3 +1,4 @@
+![rivas logo](./Rivas_logo.jpg)
 # Rivas
 
 Rivas is a terminal Markdown viewer focused on rendering rich Markdown content
