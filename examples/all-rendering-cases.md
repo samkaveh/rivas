@@ -68,6 +68,14 @@ def fibonacci(n: int) -> list[int]:
     while len(values) < n:
         values.append(values[-1] + values[-2])
     return values[:n]
+
+# Some comments
+def some_func(d: int, e: int):
+    """ This function does sth """
+    a = {'b': 'c'}
+    # Why b and not d
+    f = d * e
+    print(a['b'])
 ```
 
 ## Tables
