@@ -114,7 +114,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         },
     );
     if let Some(r) = rect {
-        let pos = (r.left, r.top);
+        let mut pos = (r.left, r.top);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
@@ -123,9 +123,13 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let mut visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
 
-            let visible = x >= 0 && y >= 0 && visible_cols > 0 && visible_rows > 0;
+            let visible = x >= 0 && visible_cols > 0 && visible_rows > 0;
+            if y < 0 && visible_rows >= 0 {
+                visible_rows = (visible_rows + y).max(0);
+                pos.1 = 0;
+            }
 
             render_image((pos, visible, visible_cols, visible_rows));
         }
