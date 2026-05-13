@@ -11,12 +11,28 @@ pub struct MermaidBlockProps {
     pub source: String,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
 pub fn MermaidBlock(props: &MermaidBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let scale = props.scale.unwrap_or(1.0);
     element! {
-       KittyMermaid(source: props.source.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
+       View(flex_direction: FlexDirection::Column) {
+           View(flex_direction: FlexDirection::Row, gap: 1, margin_bottom: 1) {
+               View(background_color: Color::AnsiValue(238)) {
+                   Text(content: " Mermaid ", weight: Weight::Bold)
+               }
+               View(background_color: Color::AnsiValue(240)) {
+                   Text(content: " + ", color: Color::AnsiValue(255))
+               }
+               View(background_color: Color::AnsiValue(240)) {
+                   Text(content: " - ", color: Color::AnsiValue(255))
+               }
+               Text(content: format!(" {:.1}x", scale), color: Color::AnsiValue(244))
+           }
+           KittyMermaid(source: props.source.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scale: scale)
+       }
     }
 }
 
@@ -25,6 +41,7 @@ pub struct KittyMermaidProps {
     pub source: String,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: f32,
 }
 
 #[component]
@@ -40,7 +57,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("{}:{}", vw, props.source);
+    let key = format!("{}:{}:{}", vw, props.scale, props.source);
 
     if *cache_key.read() != key {
         cache_key.set(key);
@@ -51,7 +68,8 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     }
 
     if data_cache.read().is_empty() {
-        let loaded_image = match render_mermaid_to_png(&props.source, 2 * vw) {
+        let max_w = (2.0 * vw as f32 * props.scale).round() as u32;
+        let loaded_image = match render_mermaid_to_png(&props.source, max_w) {
             Ok(v) => v,
             Err(e) => {
                 return element! {
@@ -67,7 +85,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         let caps = TermCaps::detect().unwrap();
 
         cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-        cols_ = cols_.min(vw);
+        cols_ = cols_.min((vw as f32 * props.scale).round() as u32);
         rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
         rows_ = rows_.min(vh);
 

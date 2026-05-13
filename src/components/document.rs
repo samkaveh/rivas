@@ -13,6 +13,7 @@ pub struct DocumentProps {
     pub viewport_width: Option<u32>,
     pub keyboard_navigation: Option<bool>,
     pub follow_ref: Option<Ref<usize>>,
+    pub scale: Option<f32>,
 }
 
 #[component]
@@ -22,6 +23,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
 
     let vh = props.viewport_height;
     let vw = props.viewport_width;
+    let scale = props.scale;
     let keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
     let scroll_handle = hooks.use_ref_default::<ScrollViewHandle>();
     let mut pending_g = hooks.use_state(|| false);
@@ -152,7 +154,8 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                             blocks: doc.blocks,
                             file_path: file_path,
                             viewport_height: vh,
-                            viewport_width: vw
+                            viewport_width: vw,
+                            scale
                         )
                     }
                 }
