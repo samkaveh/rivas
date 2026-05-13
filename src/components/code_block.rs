@@ -2,7 +2,7 @@ use iocraft::prelude::*;
 use std::sync::LazyLock;
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
-static SS: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static SS: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
 static TS: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 #[derive(Default, Props)]
