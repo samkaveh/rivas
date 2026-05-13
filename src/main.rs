@@ -88,7 +88,7 @@ struct AppProps<'a> {
 fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let (width, height) = hooks.use_terminal_size();
     let mut system = hooks.use_context_mut::<SystemContext>();
-    let mut should_exit = hooks.use_state(|| false);
+    let should_exit = hooks.use_state(|| false);
     let path = props.file_path.clone().unwrap_or_default();
     let path_name = path
         .to_str()
@@ -96,28 +96,41 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         .unwrap_or("untitled.md")
         .to_string();
     let content = hooks.use_state(|| props.content.to_string());
-    let mut mouse_captured = hooks.use_state(|| false);
-    let mut edit_mode = hooks.use_state(|| props.edit);
+    let mouse_captured = hooks.use_state(|| false);
+    let edit_mode = hooks.use_state(|| props.edit);
+    let mermaid_scale = hooks.use_state(|| 1.0f32);
     let editor_line = hooks.use_ref(|| 0usize);
 
-    hooks.use_terminal_events(move |event| match event {
-        TerminalEvent::Key(KeyEvent {
-            code,
-            modifiers: _,
-            kind,
-            ..
-        }) if kind != KeyEventKind::Release => match code {
-            KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
-            KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
-            KeyCode::Char('m') => mouse_captured.set(true),
+    hooks.use_terminal_events({
+        let mut mermaid_scale = mermaid_scale.clone();
+        let mut should_exit = should_exit.clone();
+        let mut edit_mode = edit_mode.clone();
+        let mut mouse_captured = mouse_captured.clone();
+        move |event| match event {
+            TerminalEvent::Key(KeyEvent {
+                code,
+                modifiers: _,
+                kind,
+                ..
+            }) if kind != KeyEventKind::Release => match code {
+                KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
+                KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
+                KeyCode::Char('m') => mouse_captured.set(true),
+                KeyCode::Char('+') | KeyCode::Char('=') if !edit_mode.get() => {
+                    mermaid_scale.set(mermaid_scale.get() + 0.1);
+                }
+                KeyCode::Char('-') if !edit_mode.get() => {
+                    mermaid_scale.set((mermaid_scale.get() - 0.1).max(0.1));
+                }
+                _ => {}
+            },
             _ => {}
-        },
-        _ => {}
+        }
     });
 
     hooks.use_effect(
         {
-            let edit_mode = edit_mode.get();
+            let _edit_mode = edit_mode.get();
             move || {
                 if !kitty::is_supported() {
                     return;
@@ -173,15 +186,17 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 }
                 View(width: 1, height, background_color: Color::AnsiValue(238)) {}
                 View(width: preview_width.saturating_sub(1), height, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
-                    Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line))
+                    Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line), scale: Some(mermaid_scale.get()))
                     View(width: 100pct, background_color: Color::AnsiValue(238)) {
                         Text(content: " PREVIEW ", color: Color::AnsiValue(250), weight: Weight::Bold)
                     }
                     View(width: 100pct) {
                         Text(content: " :view returns to rendered view ", color: Color::AnsiValue(242))
                     }
-                    View(width: 100pct, background_color: Color::AnsiValue(234)) {
+                    View(width: 100pct, background_color: Color::AnsiValue(234), flex_direction: FlexDirection::Row) {
                         Text(content: " live markdown preview ", color: Color::AnsiValue(242))
+                        View(flex_grow: 1.0) {}
+                        Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: Color::AnsiValue(242))
                     }
                 }
             }
@@ -189,7 +204,38 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     } else {
         element! {
             View(flex_direction: FlexDirection::Column,  width, height) {
-                Document(content: current_content, file_path: path, viewport_height: height as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None)
+                Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(1) as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None, scale: Some(mermaid_scale.get()))
+                View(width: 100pct, height: 1, background_color: Color::AnsiValue(236), flex_direction: FlexDirection::Row) {
+                    View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " q ", color: Color::Black)
+                    }
+                    Text(content: " Quit ")
+                    View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " e ", color: Color::Black)
+                    }
+                    Text(content: " Edit ")
+                    View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " j/k ", color: Color::Black)
+                    }
+                    Text(content: " Scroll ")
+                    View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " gg/G ", color: Color::Black)
+                    }
+                    Text(content: " Top/Bottom ")
+                    View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " + ", color: Color::Black)
+                    }
+                    View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " - ", color: Color::Black)
+                    }
+                    Text(content: " Zoom ")
+                    View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " m ", color: Color::Black)
+                    }
+                    Text(content: " Mouse ")
+                    View(flex_grow: 1.0) {}
+                    Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: Color::AnsiValue(245))
+                }
             }
         }
     }

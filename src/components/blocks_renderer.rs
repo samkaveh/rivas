@@ -19,6 +19,7 @@ pub struct BlocksRendererProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
@@ -30,6 +31,7 @@ pub fn BlocksRenderer(
     let file_path = props.file_path.clone();
     let vh = props.viewport_height;
     let vw = props.viewport_width;
+    let scale = props.scale;
 
     element! {
         View(flex_direction: FlexDirection::Column) {
@@ -37,7 +39,7 @@ pub fn BlocksRenderer(
                 Block::Heading { level, content, id: _ } => element!{Heading(level: *level, content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                 Block::Paragraph { content } => element!{Paragraph(content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                 Block::Code { language, code } => element!{CodeBlock(language: language.clone(), code: code.clone())}.into_any(),
-                Block::Mermaid { source } => element!{MermaidBlock(source: source.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
+                Block::Mermaid { source } => element!{MermaidBlock(source: source.clone(), viewport_height: vh, viewport_width: vw, scale)}.into_any(),
                 Block::Math { content, display } => element!{MathBlock(content: content.clone(), display: *display, viewport_height: vh, viewport_width: vw)}.into_any(),
                 Block::Quote { children } => element!{QuoteBlock(children: children.clone(), file_path: Some(file_path.clone()), viewport_height: vh, viewport_width: vw)}.into_any(),
                 Block::List { ordered, start, items } => element!{ListBlock(ordered: *ordered, start: *start, items: items.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
