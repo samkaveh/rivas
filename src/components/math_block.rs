@@ -114,7 +114,8 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
             let mut visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
 
-            let visible = x >= 0 && visible_cols > 0 && visible_rows > 0;
+            let visible =
+                x >= 0 && (y + visible_rows - 1) >= 0 && visible_cols > 0 && visible_rows > 0;
             if y < 0 && visible_rows >= 0 {
                 visible_rows = (visible_rows + y).max(0);
                 pos.1 = 0;
