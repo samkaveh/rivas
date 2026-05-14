@@ -1,4 +1,5 @@
 ![rivas logo](./Rivas_logo.jpg)
+
 # Rivas
 
 Rivas is a terminal Markdown viewer focused on rendering rich Markdown content
@@ -18,6 +19,8 @@ protocol.
 - Vim-style source editing with a side-by-side live preview.
 - Vim-style keyboard navigation in the rendered viewer.
 
+![rivas features demo](./rivas.gif)
+
 ## Requirements
 
 Rivas requires a terminal that supports the Kitty graphics protocol, such as:
@@ -29,36 +32,40 @@ Rivas requires a terminal that supports the Kitty graphics protocol, such as:
 If the terminal does not support the protocol, Rivas exits with an error instead
 of falling back to a degraded image mode.
 
-## Usage
+## 🚀 Installation and Usage
 
-View a file:
+### 🪟 Windows
 
-```sh
-cargo run -- README.md
+1. Download the `rivas-x86_64-pc-windows-msvc.zip` from the Assets in releases.
+2. Extract the `.exe` file to a folder of your choice.
+3. (Optional) Add the folder to your **System PATH** to run `rivas` from any terminal.
+
+Note: Only works with nightly WezTerm on windows (since other versions do not have full kitty support).
+
+### 🍎 macOS
+
+**Via Binary:**
+
+1. Download `rivas-x86_64-apple-darwin.tar.gz` from assets in releases.
+2. Extract the file: `rivas-x86_64-apple-darwin.tar.gz`.
+3. Move it to your bin folder: `sudo mv rivas /usr/local/bin/`.
+4. **Note:** If macOS blocks the app, go to *System Settings > Privacy & Security* and click "Allow Anyway."
+
+### 🐧 Linux
+
+```bash
+# Download the binary
+curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.1.2/rivas-x86_64-unknown-linux-gnu.tar.gz
+
+# Extract and install
+tar -xzf rivas-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 rivas /usr/local/bin/rivas
 ```
 
-Read Markdown from stdin:
+Then simply run:
 
 ```sh
-cat README.md | cargo run
-```
-
-Use the light theme:
-
-```sh
-cargo run -- --theme light README.md
-```
-
-Start directly in side-by-side edit mode:
-
-```sh
-cargo run -- --edit README.md
-```
-
-Use the rendering fixture:
-
-```sh
-cargo run -- examples/all-rendering-cases.md
+rivas examples/all-rendering-cases.md
 ```
 
 ## Editing
