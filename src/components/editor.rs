@@ -77,6 +77,35 @@ impl Buffer {
         self.lines[row].insert(byte, ch);
     }
 
+    fn insert_text(&mut self, row: usize, col: usize, text: &str) -> (usize, usize) {
+        if text.is_empty() {
+            return (row, col);
+        }
+        let start_byte = self.byte_offset(row, col);
+        let line = &self.lines[row];
+        let left = line[..start_byte].to_string();
+        let right = line[start_byte..].to_string();
+
+        let parts: Vec<&str> = text.split('\n').collect();
+        if parts.len() == 1 {
+            let new_line = format!("{}{}{}", left, parts[0], right);
+            self.lines[row] = new_line;
+            let end_col = col + parts[0].chars().count();
+            (row, end_col.saturating_sub(1))
+        } else {
+            self.lines[row] = format!("{}{}", left, parts[0]);
+            let num_parts = parts.len();
+            for i in 1..(num_parts - 1) {
+                self.lines.insert(row + i, parts[i].to_string());
+            }
+            let last_line = format!("{}{}", parts[num_parts - 1], right);
+            self.lines.insert(row + num_parts - 1, last_line);
+            let end_row = row + num_parts - 1;
+            let end_col = parts[num_parts - 1].chars().count();
+            (end_row, end_col.saturating_sub(1))
+        }
+    }
+
     fn delete_char(&mut self, row: usize, col: usize) -> Option<char> {
         if col >= self.char_count(row) {
             return None;
@@ -457,10 +486,9 @@ impl EditorState {
             self.col = self.buf.first_non_blank(self.row);
         } else {
             let col = (self.col + 1).min(self.buf.char_count(self.row));
-            for (i, ch) in text.chars().enumerate() {
-                self.buf.insert_char(self.row, col + i, ch);
-            }
-            self.col = (col + text.chars().count()).saturating_sub(1);
+            let (r, c) = self.buf.insert_text(self.row, col, &text);
+            self.row = r;
+            self.col = c;
         }
         self.modified = true;
         self.clamp();
@@ -483,9 +511,9 @@ impl EditorState {
             }
             self.col = self.buf.first_non_blank(self.row);
         } else {
-            for (i, ch) in text.chars().enumerate() {
-                self.buf.insert_char(self.row, self.col + i, ch);
-            }
+            let (r, c) = self.buf.insert_text(self.row, self.col, &text);
+            self.row = r;
+            self.col = c;
         }
         self.modified = true;
         self.clamp();
@@ -971,17 +999,17 @@ fn handle_visual(s: &mut EditorState, code: KeyCode) -> bool {
             s.mode = Mode::Normal;
         }
         KeyCode::Char('d') | KeyCode::Char('x') => {
-            let d = (s.row, s.col);
+            let d = s.visual_start;
             s.execute_operator('d', d, '"');
             s.mode = Mode::Normal;
         }
         KeyCode::Char('y') => {
-            let d = (s.row, s.col);
+            let d = s.visual_start;
             s.execute_operator('y', d, '"');
             s.mode = Mode::Normal;
         }
         KeyCode::Char('c') => {
-            let d = (s.row, s.col);
+            let d = s.visual_start;
             s.execute_operator('c', d, '"');
         }
         key => {
