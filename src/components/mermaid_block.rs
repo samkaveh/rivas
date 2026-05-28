@@ -68,7 +68,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     }
 
     if data_cache.read().is_empty() {
-        let max_w = (2.0 * vw as f32 * props.scale).round() as u32;
+        let max_w = (3.0 * vw as f32 * props.scale).round() as u32;
         let loaded_image = match render_mermaid_to_png(&props.source, max_w) {
             Ok(v) => v,
             Err(e) => {
