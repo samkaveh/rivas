@@ -89,13 +89,13 @@ fn render_inlines_recursive(
             }
             Inline::Code(c) => {
                 out.push(
-                    element! { Text(content: format!(" {} ", c), color: Color::Green) }.into_any(),
+                    element! { Text(content: format!(" {} ", c), color: crate::theme::GREEN) }.into_any(),
                 );
             }
             Inline::Link { text, url, .. } => {
                 render_inlines_recursive(
                     text,
-                    Color::Blue,
+                    crate::theme::BLUE,
                     bold,
                     italic,
                     file_path,
@@ -104,7 +104,7 @@ fn render_inlines_recursive(
                     out,
                 );
                 out.push(
-                    element! { Text(content: format!(" ({})", url), color: Color::DarkGrey) }
+                    element! { Text(content: format!(" ({})", url), color: crate::theme::COMMENT) }
                         .into_any(),
                 );
             }

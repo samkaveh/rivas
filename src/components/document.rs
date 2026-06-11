@@ -141,15 +141,15 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     let file_path = props.file_path.clone();
 
     element! {
-    View(width: vw.unwrap_or(100), height: vh.unwrap_or(100), flex_direction: FlexDirection::Column, background_color: Color::AnsiValue(234)) {
-        View(flex_grow: 1.0, border_style: BorderStyle::Single, border_color: Color::AnsiValue(238)){
+    View(width: vw.unwrap_or(100), height: vh.unwrap_or(100), flex_direction: FlexDirection::Column, background_color: crate::theme::BG) {
+        View(flex_grow: 1.0, border_style: BorderStyle::Single, border_color: crate::theme::BORDER){
                 ScrollView(
                     handle: Some(scroll_handle),
                     keyboard_scroll: Some(false),
-                    scrollbar_thumb_color: Some(Color::AnsiValue(250)),
-                    scrollbar_track_color: Some(Color::AnsiValue(238)),
+                    scrollbar_thumb_color: Some(crate::theme::FG),
+                    scrollbar_track_color: Some(crate::theme::DARK_BG),
                 ) {
-                    View(flex_direction:FlexDirection::Column, padding: 1){
+                    View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_top: 1, padding_bottom: 1) {
                         BlocksRenderer(
                             blocks: doc.blocks,
                             file_path: file_path,

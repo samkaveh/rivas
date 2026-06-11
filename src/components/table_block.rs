@@ -18,8 +18,8 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
     let ncols = props.headers.len();
     if ncols == 0 {
         return element! {
-            View(padding: 1, margin_bottom: 1) {
-                Text(content: "Empty table".to_string(), color: Color::AnsiValue(242))
+            View(margin_bottom: 1) {
+                Text(content: "Empty table".to_string(), color: crate::theme::COMMENT)
             }
         }
         .into_any();
@@ -55,12 +55,12 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
             flex_direction: FlexDirection::Column,
             margin_bottom: 1,
             border_style: BorderStyle::Single,
-            border_color: Color::AnsiValue(238),
-            background_color: Color::AnsiValue(234),
+            border_color: crate::theme::BORDER,
+            background_color: crate::theme::BG,
             width: table_width,
         ) {
             // Header Row
-            View(flex_direction: FlexDirection::Row, border_style: BorderStyle::Single, border_edges: Edges::Bottom, border_color: Color::AnsiValue(238)) {
+            View(flex_direction: FlexDirection::Row, border_style: BorderStyle::Single, border_edges: Edges::Bottom, border_color: crate::theme::BORDER) {
                 #(props.headers.iter().enumerate().map(|(i, cell)| {
                     let alignment = props.alignments.get(i).cloned().unwrap_or(Alignment::None);
                     let justify = match alignment {
@@ -71,7 +71,7 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                     element! {
                         View(width: col_widths[i], justify_content: justify, padding_left: 1, padding_right: 1) {
                             View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
-                                #(render_inlines(&cell.content, Color::Cyan, true, &props.file_path, props.viewport_height, props.viewport_width))
+                                #(render_inlines(&cell.content, crate::theme::CYAN, true, &props.file_path, props.viewport_height, props.viewport_width))
                             }
                         }
                     }.into_any()
@@ -82,7 +82,7 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                 element! {
                     View(
                         flex_direction: FlexDirection::Row,
-                        background_color: if row_idx % 2 == 1 { Some(Color::AnsiValue(235)) } else { None }
+                        background_color: if row_idx % 2 == 1 { Some(crate::theme::DARK_BG) } else { None }
                     ) {
                         #((0..ncols).map(|col_idx| {
                             let cell = row.get(col_idx).cloned().unwrap_or(TableCell { content: Vec::new() });
@@ -95,7 +95,7 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                             element! {
                                 View(width: col_widths[col_idx], justify_content: justify, padding_left: 1, padding_right: 1) {
                                     View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
-                                        #(render_inlines(&cell.content, Color::White, false, &props.file_path, props.viewport_height, props.viewport_width))
+                                        #(render_inlines(&cell.content, crate::theme::FG, false, &props.file_path, props.viewport_height, props.viewport_width))
                                     }
                                 }
                             }.into_any()

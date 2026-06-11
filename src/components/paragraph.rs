@@ -15,7 +15,7 @@ pub struct ParagraphProps {
 pub fn Paragraph(props: &ParagraphProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let styled_elements = render_inlines(
         &props.content,
-        Color::White,
+        crate::theme::FG,
         false,
         &props.file_path,
         props.viewport_height,
@@ -23,7 +23,7 @@ pub fn Paragraph(props: &ParagraphProps, _hooks: Hooks) -> impl Into<AnyElement<
     );
 
     element! {
-        View(padding: 1, margin_bottom: 1, flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
+        View(margin_bottom: 1, flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
             #(styled_elements)
         }
     }

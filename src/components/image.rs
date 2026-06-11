@@ -16,16 +16,14 @@ pub struct ImageProps {
 #[component]
 pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     element! {
-        View(flex_direction: FlexDirection::Column, padding: 1) {
+        View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
             #(props.title.clone().map(|title| element! {
-            View(margin_bottom: 1) {
-                Text(content: title, color: Color::DarkGrey)
+            View() {
+                Text(content: title, color: crate::theme::COMMENT)
             }
             }))
 
-            View(margin_bottom: 1) {
             KittyImage(url: props.url.clone(),file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
-            }
         }
     }
 }

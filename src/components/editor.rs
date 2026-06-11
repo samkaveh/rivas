@@ -317,10 +317,10 @@ impl Mode {
     }
     fn color(&self) -> Color {
         match self {
-            Mode::Normal => Color::Blue,
-            Mode::Insert => Color::Green,
-            Mode::Visual => Color::Magenta,
-            Mode::Command | Mode::Search { .. } => Color::Yellow,
+            Mode::Normal => crate::theme::BLUE,
+            Mode::Insert => crate::theme::GREEN,
+            Mode::Visual => crate::theme::MAGENTA,
+            Mode::Command | Mode::Search { .. } => crate::theme::YELLOW,
         }
     }
 }
@@ -725,8 +725,8 @@ impl EditorState {
     // per line instead of one element per character. Cuts element count ~40x.
     fn render_lines(&self, view_height: usize, view_width: usize) -> Vec<RenderedLine> {
         let text_w = view_width.saturating_sub(5);
-        let line_bg = Color::AnsiValue(236);
-        let normal_bg = Color::AnsiValue(234);
+        let line_bg = crate::theme::STATUS_BG;
+        let normal_bg = crate::theme::BG;
 
         let (vr1, vc1, vr2, vc2) = if self.mode == Mode::Visual {
             let (ar, ac) = self.visual_start;
@@ -771,18 +771,18 @@ impl EditorState {
 
                     let (fg, cell_bg, bold) = if is_cursor {
                         match self.mode {
-                            Mode::Insert => (Color::Black, Color::Green, false),
-                            Mode::Visual => (Color::Black, Color::Yellow, false),
-                            _ => (Color::Black, Color::White, true),
+                            Mode::Insert => (crate::theme::DARK_BG, crate::theme::GREEN, false),
+                            Mode::Visual => (crate::theme::DARK_BG, crate::theme::YELLOW, false),
+                            _ => (crate::theme::DARK_BG, crate::theme::FG, true),
                         }
                     } else if in_visual {
-                        (Color::White, Color::Magenta, false)
+                        (crate::theme::BG, crate::theme::MAGENTA, false)
                     } else if in_search {
-                        (Color::Black, Color::Yellow, false)
+                        (crate::theme::DARK_BG, crate::theme::YELLOW, false)
                     } else if is_cur {
-                        (Color::AnsiValue(252), line_bg, false)
+                        (crate::theme::FG, line_bg, false)
                     } else {
-                        (Color::AnsiValue(252), normal_bg, false)
+                        (crate::theme::FG, normal_bg, false)
                     };
 
                     if let Some(last) = runs.last_mut() {
@@ -1680,18 +1680,18 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
             // ── Editor area ──────────────────────────────────────────────
             View(flex_grow: 1.0, flex_direction: FlexDirection::Row, overflow: Overflow::Hidden) {
                 // Gutter
-                View(width: 5, flex_direction: FlexDirection::Column, background_color: Color::AnsiValue(235)) {
+                View(width: 5, flex_direction: FlexDirection::Column, background_color: crate::theme::DARK_BG) {
                     #(lines.iter().map(|line| match line {
                         RenderedLine::Tilde => element! {
                             View(width: 100pct, justify_content: JustifyContent::FlexEnd, padding_right: 1) {
-                                Text(content: "~", color: Color::DarkBlue)
+                                Text(content: "~", color: crate::theme::COMMENT)
                             }
                         },
                         RenderedLine::Text { line_num, is_current, .. } => element! {
                             View(width: 100pct, justify_content: JustifyContent::FlexEnd, padding_right: 1) {
                                 Text(
                                     content: format!("{}", line_num + 1),
-                                    color: if *is_current { Color::White } else { Color::AnsiValue(240) },
+                                    color: if *is_current { crate::theme::YELLOW } else { crate::theme::COMMENT },
                                     weight: if *is_current { Weight::Bold } else { Weight::Normal },
                                 )
                             }
@@ -1703,8 +1703,8 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
                 View(flex_grow: 1.0, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
                     #(lines.iter().map(|line| match line {
                         RenderedLine::Tilde => element! {
-                            View(background_color: Color::AnsiValue(234)) {
-                                Text(content: "~", color: Color::DarkBlue)
+                            View(background_color: crate::theme::BG) {
+                                Text(content: "~", color: crate::theme::COMMENT)
                             }
                         },
                         RenderedLine::Text { runs, bg, .. } => element! {
@@ -1728,31 +1728,31 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
             View(
                 width: 100pct,
                 flex_direction: FlexDirection::Row,
-                background_color: Color::AnsiValue(238),
+                background_color: crate::theme::BORDER,
             ) {
                 View(background_color: mode.color(), padding_left: 1, padding_right: 1) {
-                    Text(content: mode_str, color: Color::Black, weight: Weight::Bold)
+                    Text(content: mode_str, color: crate::theme::DARK_BG, weight: Weight::Bold)
                 }
                 View(flex_grow: 1.0, padding_left: 1) {
-                    Text(content: fname_str, color: Color::AnsiValue(250))
+                    Text(content: fname_str, color: crate::theme::FG)
                 }
                 View(padding_left: 1, padding_right: 1) {
-                    Text(content: format!("{}:{} / {}", row + 1, col + 1, total), color: Color::AnsiValue(250))
+                    Text(content: format!("{}:{} / {}", row + 1, col + 1, total), color: crate::theme::FG)
                 }
                 View(padding_right: 1) {
-                    Text(content: pos_str, color: Color::AnsiValue(250))
+                    Text(content: pos_str, color: crate::theme::FG)
                 }
             }
 
             // ── Cmdline / message ────────────────────────────────────────
             View(width: 100pct, flex_direction: FlexDirection::Row) {
                 View(flex_grow: 1.0) {
-                    Text(content: cmdline_text, color: Color::White)
+                    Text(content: cmdline_text, color: crate::theme::FG)
                 }
                 #(if !count_hint.is_empty() {
                     Some(element! {
                         View(padding_right: 1) {
-                            Text(content: count_hint.clone(), color: Color::Yellow)
+                            Text(content: count_hint.clone(), color: crate::theme::YELLOW)
                         }
                     })
                 } else {
@@ -1761,10 +1761,10 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
             }
 
             // ── Help line ────────────────────────────────────────────────
-            View(width: 100pct, background_color: Color::AnsiValue(234)) {
+            View(width: 100pct, background_color: crate::theme::DARK_BG) {
                 Text(
-                    content: " i/a=Insert  v=Visual  :w=Save  :q=Quit  u=Undo  C-r=Redo  /=Search  C-p=Find  ZZ=SaveQuit ",
-                    color: Color::AnsiValue(242),
+                    content: " i/a=Insert  v=Visual  :w=Save  :q=Quit  u=Undo  C-r=Redo  /=Search  C-p=Find  ZZ=SaveQuit",
+                    color: crate::theme::COMMENT,
                 )
             }
         }

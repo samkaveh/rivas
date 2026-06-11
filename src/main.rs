@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{IsTerminal, Read, Write, stdin};
 use std::path::PathBuf;
 mod assets;
+mod theme;
 mod components;
 mod document;
 mod output;
@@ -239,19 +240,19 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                         on_view
                     )
                 }
-                View(width: 1, height, background_color: Color::AnsiValue(238)) {}
+                View(width: 1, height, background_color: crate::theme::BORDER) {}
                 View(width: preview_width.saturating_sub(1), height, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
                     Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line), scale: Some(mermaid_scale.get()))
-                    View(width: 100pct, background_color: Color::AnsiValue(238)) {
-                        Text(content: " PREVIEW ", color: Color::AnsiValue(250), weight: Weight::Bold)
+                    View(width: 100pct, background_color: crate::theme::STATUS_BG) {
+                        Text(content: " PREVIEW ", color: crate::theme::FG, weight: Weight::Bold)
                     }
                     View(width: 100pct) {
-                        Text(content: " :view returns to rendered view ", color: Color::AnsiValue(242))
+                        Text(content: " :view returns to rendered view ", color: crate::theme::COMMENT)
                     }
-                    View(width: 100pct, background_color: Color::AnsiValue(234), flex_direction: FlexDirection::Row) {
-                        Text(content: " live markdown preview ", color: Color::AnsiValue(242))
+                    View(width: 100pct, background_color: crate::theme::DARK_BG, flex_direction: FlexDirection::Row) {
+                        Text(content: " live markdown preview ", color: crate::theme::COMMENT)
                         View(flex_grow: 1.0) {}
-                        Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: Color::AnsiValue(242))
+                        Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
                     }
                 }
             }
@@ -260,40 +261,40 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         element! {
             View(flex_direction: FlexDirection::Column,  width, height) {
                 Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(1) as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None, scale: Some(mermaid_scale.get()))
-                View(width: 100pct, height: 1, background_color: Color::AnsiValue(236), flex_direction: FlexDirection::Row) {
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " q ", color: Color::Black)
+                View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " q ", color: crate::theme::FG)
                     }
                     Text(content: " Quit ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " e ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " e ", color: crate::theme::FG)
                     }
                     Text(content: " Edit ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " C-p ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " C-p ", color: crate::theme::FG)
                     }
                     Text(content: " Find ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " j/k ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " j/k ", color: crate::theme::FG)
                     }
                     Text(content: " Scroll ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " gg/G ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " gg/G ", color: crate::theme::FG)
                     }
                     Text(content: " Top/Bottom ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " + ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " + ", color: crate::theme::FG)
                     }
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " - ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " - ", color: crate::theme::FG)
                     }
                     Text(content: " Zoom ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " m ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " m ", color: crate::theme::FG)
                     }
                     Text(content: " Mouse ")
                     View(flex_grow: 1.0) {}
-                    Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: Color::AnsiValue(245))
+                    Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
                 }
             }
         }

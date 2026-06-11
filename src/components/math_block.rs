@@ -17,7 +17,9 @@ pub struct MathBlockProps {
 #[component]
 pub fn MathBlock(props: &MathBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     element! {
-       KittyMath(content: props.content.clone(), display: props.display.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
+        View(margin_bottom: 1) {
+            KittyMath(content: props.content.clone(), display: props.display.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
+        }
     }
 }
 

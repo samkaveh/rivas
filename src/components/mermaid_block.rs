@@ -18,18 +18,18 @@ pub struct MermaidBlockProps {
 pub fn MermaidBlock(props: &MermaidBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let scale = props.scale.unwrap_or(1.0);
     element! {
-       View(flex_direction: FlexDirection::Column) {
+       View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
            View(flex_direction: FlexDirection::Row, gap: 1, margin_bottom: 1) {
-               View(background_color: Color::AnsiValue(238)) {
+               View(background_color: crate::theme::DARK_BG) {
                    Text(content: " Mermaid ", weight: Weight::Bold)
                }
-               View(background_color: Color::AnsiValue(240)) {
-                   Text(content: " + ", color: Color::AnsiValue(255))
+               View(background_color: crate::theme::STATUS_BG) {
+                   Text(content: " + ", color: crate::theme::FG)
                }
-               View(background_color: Color::AnsiValue(240)) {
-                   Text(content: " - ", color: Color::AnsiValue(255))
+               View(background_color: crate::theme::STATUS_BG) {
+                   Text(content: " - ", color: crate::theme::FG)
                }
-               Text(content: format!(" {:.1}x", scale), color: Color::AnsiValue(244))
+               Text(content: format!(" {:.1}x", scale), color: crate::theme::COMMENT)
            }
            KittyMermaid(source: props.source.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scale: scale)
        }
