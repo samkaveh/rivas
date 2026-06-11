@@ -1538,6 +1538,19 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
     let tick: State<u64> = hooks.use_state(|| 0u64);
     let should_quit: State<bool> = hooks.use_state(|| false);
 
+    hooks.use_effect({
+        let mut state_ref = state_ref.clone();
+        let filename = props.filename.clone();
+        let initial_content = props.initial_content.clone();
+        let mut tick = tick.clone();
+        move || {
+            if let Some(s) = state_ref.write().as_mut() {
+                *s = EditorState::new(filename, &initial_content);
+            }
+            tick.set(tick.get().wrapping_add(1));
+        }
+    }, props.filename.clone());
+
     let on_change = props.on_change.clone();
     let cursor_ref = props.cursor_ref;
     let on_view = props.on_view.clone();
@@ -1750,7 +1763,7 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
             // ── Help line ────────────────────────────────────────────────
             View(width: 100pct, background_color: Color::AnsiValue(234)) {
                 Text(
-                    content: " i/a=Insert  v=Visual  :w=Save  :q=Quit  u=Undo  C-r=Redo  /=Search  n=Next  ZZ=SaveQuit ",
+                    content: " i/a=Insert  v=Visual  :w=Save  :q=Quit  u=Undo  C-r=Redo  /=Search  C-p=Find  ZZ=SaveQuit ",
                     color: Color::AnsiValue(242),
                 )
             }

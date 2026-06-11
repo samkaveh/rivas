@@ -12,6 +12,15 @@ mod output;
 
 use crate::components::document::Document;
 use crate::components::editor::NvimEditor;
+use std::sync::{Arc, Mutex};
+use skim::prelude::{Skim, SkimOptionsBuilder, SkimItemReader};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+enum AppAction {
+    #[default]
+    Quit,
+    SearchFile { edit_mode: bool },
+}
 
 #[derive(Parser)]
 #[command(
@@ -33,7 +42,7 @@ fn main() -> Result<()> {
     env_logger::init();
     let cli = Cli::parse();
 
-    let (content, file_path) = match &cli.file {
+    let (mut content, mut file_path) = match &cli.file {
         // CASE 1: User provided a path
         Some(path) => {
             if !path.exists() {
@@ -71,9 +80,45 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    smol::block_on(
-        element!(App(file_path, content: content.as_str(), edit: cli.edit)).fullscreen(),
-    )?;
+    let action = Arc::new(Mutex::new(AppAction::Quit));
+    let mut edit_mode = cli.edit;
+
+    loop {
+        *action.lock().unwrap() = AppAction::Quit;
+
+        smol::block_on(
+            element!(App(
+                file_path: file_path.clone(),
+                content: content.as_str(),
+                edit: edit_mode,
+                action: action.clone(),
+            ))
+            .fullscreen(),
+        )?;
+
+        let next_action = action.lock().unwrap().clone();
+        match next_action {
+            AppAction::Quit => break,
+            AppAction::SearchFile { edit_mode: final_edit_mode } => {
+                edit_mode = final_edit_mode;
+                if let Some(selected) = run_fuzzy_finder() {
+                    // Auto-save current file if it exists and content is modified
+                    if let Some(ref path) = file_path {
+                        if let Ok(on_disk) = fs::read_to_string(path) {
+                            if on_disk != content {
+                                let _ = fs::write(path, &content);
+                            }
+                        }
+                    }
+                    if let Ok(new_content) = fs::read_to_string(&selected) {
+                        content = new_content;
+                        file_path = Some(selected);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -82,6 +127,7 @@ struct AppProps<'a> {
     file_path: Option<PathBuf>,
     content: &'a str,
     edit: bool,
+    action: Arc<Mutex<AppAction>>,
 }
 
 #[component]
@@ -106,24 +152,33 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         let mut should_exit = should_exit.clone();
         let mut edit_mode = edit_mode.clone();
         let mut mouse_captured = mouse_captured.clone();
+        let action = props.action.clone();
         move |event| match event {
             TerminalEvent::Key(KeyEvent {
                 code,
-                modifiers: _,
+                modifiers,
                 kind,
                 ..
-            }) if kind != KeyEventKind::Release => match code {
-                KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
-                KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
-                KeyCode::Char('m') => mouse_captured.set(true),
-                KeyCode::Char('+') | KeyCode::Char('=') if !edit_mode.get() => {
-                    mermaid_scale.set(mermaid_scale.get() + 0.1);
+            }) if kind != KeyEventKind::Release => {
+                let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+                if ctrl && code == KeyCode::Char('p') {
+                    *action.lock().unwrap() = AppAction::SearchFile { edit_mode: edit_mode.get() };
+                    should_exit.set(true);
+                    return;
                 }
-                KeyCode::Char('-') if !edit_mode.get() => {
-                    mermaid_scale.set((mermaid_scale.get() - 0.1).max(0.1));
+                match code {
+                    KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
+                    KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
+                    KeyCode::Char('m') => mouse_captured.set(true),
+                    KeyCode::Char('+') | KeyCode::Char('=') if !edit_mode.get() => {
+                        mermaid_scale.set(mermaid_scale.get() + 0.1);
+                    }
+                    KeyCode::Char('-') if !edit_mode.get() => {
+                        mermaid_scale.set((mermaid_scale.get() - 0.1).max(0.1));
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     });
@@ -215,6 +270,10 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     }
                     Text(content: " Edit ")
                     View(background_color: Color::AnsiValue(244)) {
+                        Text(content: " C-p ", color: Color::Black)
+                    }
+                    Text(content: " Find ")
+                    View(background_color: Color::AnsiValue(244)) {
                         Text(content: " j/k ", color: Color::Black)
                     }
                     Text(content: " Scroll ")
@@ -239,4 +298,68 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             }
         }
     }
+}
+
+fn visit_dirs(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.')
+                        || name == "target"
+                        || name == "node_modules"
+                        || name == "build"
+                        || name == "dist"
+                        || name == "venv"
+                        || name == "env"
+                    {
+                        continue;
+                    }
+                }
+                visit_dirs(&path, files)?;
+            } else {
+                if let Some(path_str) = path.to_str() {
+                    let relative_path = if path_str.starts_with("./") {
+                        path_str[2..].to_string()
+                    } else {
+                        path_str.to_string()
+                    };
+                    files.push(relative_path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn get_local_files() -> Vec<String> {
+    let mut files = Vec::new();
+    let _ = visit_dirs(std::path::Path::new("."), &mut files);
+    files
+}
+
+fn run_fuzzy_finder() -> Option<PathBuf> {
+    let files = get_local_files();
+    let input = files.join("\n");
+
+    let options = SkimOptionsBuilder::default()
+        .height("40%".to_string())
+        .multi(false)
+        .prompt("Find File> ".to_string())
+        .build()
+        .unwrap();
+
+    let item_reader = SkimItemReader::default();
+    let items = item_reader.of_bufread(std::io::Cursor::new(input));
+
+    let output = Skim::run_with(options, Some(items)).ok()?;
+
+    if output.is_abort {
+        return None;
+    }
+
+    let selected = output.selected_items.first()?;
+    Some(PathBuf::from(selected.output().to_string()))
 }
