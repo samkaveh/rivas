@@ -12,6 +12,7 @@ pub fn render_inlines(
     file_path: &PathBuf,
     viewport_height: Option<u32>,
     viewport_width: Option<u32>,
+    scale: Option<f32>,
 ) -> Vec<AnyElement<'static>> {
     let mut elements = Vec::new();
     render_inlines_recursive(
@@ -22,6 +23,7 @@ pub fn render_inlines(
         file_path,
         viewport_height,
         viewport_width,
+        scale,
         &mut elements,
     );
     elements
@@ -35,6 +37,7 @@ fn render_inlines_recursive(
     file_path: &PathBuf,
     viewport_height: Option<u32>,
     viewport_width: Option<u32>,
+    scale: Option<f32>,
     out: &mut Vec<AnyElement<'static>>,
 ) {
     for inline in inlines {
@@ -60,6 +63,7 @@ fn render_inlines_recursive(
                     file_path,
                     viewport_height,
                     viewport_width,
+                    scale,
                     out,
                 );
             }
@@ -72,6 +76,7 @@ fn render_inlines_recursive(
                     file_path,
                     viewport_height,
                     viewport_width,
+                    scale,
                     out,
                 );
             }
@@ -84,12 +89,14 @@ fn render_inlines_recursive(
                     file_path,
                     viewport_height,
                     viewport_width,
+                    scale,
                     out,
                 );
             }
             Inline::Code(c) => {
                 out.push(
-                    element! { Text(content: format!(" {} ", c), color: crate::theme::GREEN) }.into_any(),
+                    element! { Text(content: format!(" {} ", c), color: crate::theme::GREEN) }
+                        .into_any(),
                 );
             }
             Inline::Link { text, url, .. } => {
@@ -101,6 +108,7 @@ fn render_inlines_recursive(
                     file_path,
                     viewport_height,
                     viewport_width,
+                    scale,
                     out,
                 );
                 out.push(
@@ -122,7 +130,7 @@ fn render_inlines_recursive(
             Inline::Image { alt: _, url } => {
                 // For inline images, we use KittyImage directly without block margins
                 out.push(element! {
-                    KittyImage(url: url.clone(), file_path: file_path.clone(), viewport_height: viewport_height, viewport_width: viewport_width)
+                    KittyImage(url: url.clone(), file_path: file_path.clone(), viewport_height: viewport_height, viewport_width: viewport_width, scale: scale.unwrap_or(1.0))
                 }.into_any());
             }
         }

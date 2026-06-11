@@ -6,21 +6,23 @@ use std::fs;
 use std::io::{IsTerminal, Read, Write, stdin};
 use std::path::PathBuf;
 mod assets;
-mod theme;
 mod components;
 mod document;
 mod output;
+mod theme;
 
 use crate::components::document::Document;
 use crate::components::editor::NvimEditor;
+use skim::prelude::{Skim, SkimItemReader, SkimOptionsBuilder};
 use std::sync::{Arc, Mutex};
-use skim::prelude::{Skim, SkimOptionsBuilder, SkimItemReader};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 enum AppAction {
     #[default]
     Quit,
-    SearchFile { edit_mode: bool },
+    SearchFile {
+        edit_mode: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -100,7 +102,9 @@ fn main() -> Result<()> {
         let next_action = action.lock().unwrap().clone();
         match next_action {
             AppAction::Quit => break,
-            AppAction::SearchFile { edit_mode: final_edit_mode } => {
+            AppAction::SearchFile {
+                edit_mode: final_edit_mode,
+            } => {
                 edit_mode = final_edit_mode;
                 if let Some(selected) = run_fuzzy_finder() {
                     // Auto-save current file if it exists and content is modified
@@ -163,7 +167,9 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             }) if kind != KeyEventKind::Release => {
                 let ctrl = modifiers.contains(KeyModifiers::CONTROL);
                 if ctrl && code == KeyCode::Char('p') {
-                    *action.lock().unwrap() = AppAction::SearchFile { edit_mode: edit_mode.get() };
+                    *action.lock().unwrap() = AppAction::SearchFile {
+                        edit_mode: edit_mode.get(),
+                    };
                     should_exit.set(true);
                     return;
                 }
@@ -172,10 +178,20 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
                     KeyCode::Char('m') => mouse_captured.set(true),
                     KeyCode::Char('+') | KeyCode::Char('=') if !edit_mode.get() => {
-                        mermaid_scale.set(mermaid_scale.get() + 0.1);
+                        let max_scale = 3.0f32; // upper cap
+                        let current = mermaid_scale.get();
+                        let next = (current + 0.1).min(max_scale);
+                        if (next - current).abs() > f32::EPSILON {
+                            mermaid_scale.set(next);
+                        }
                     }
                     KeyCode::Char('-') if !edit_mode.get() => {
-                        mermaid_scale.set((mermaid_scale.get() - 0.1).max(0.1));
+                        let min_scale = 0.1f32;
+                        let current = mermaid_scale.get();
+                        let next = (current - 0.1).max(min_scale);
+                        if (next - current).abs() > f32::EPSILON {
+                            mermaid_scale.set(next);
+                        }
                     }
                     _ => {}
                 }

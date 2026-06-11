@@ -1538,18 +1538,21 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
     let tick: State<u64> = hooks.use_state(|| 0u64);
     let should_quit: State<bool> = hooks.use_state(|| false);
 
-    hooks.use_effect({
-        let mut state_ref = state_ref.clone();
-        let filename = props.filename.clone();
-        let initial_content = props.initial_content.clone();
-        let mut tick = tick.clone();
-        move || {
-            if let Some(s) = state_ref.write().as_mut() {
-                *s = EditorState::new(filename, &initial_content);
+    hooks.use_effect(
+        {
+            let mut state_ref = state_ref.clone();
+            let filename = props.filename.clone();
+            let initial_content = props.initial_content.clone();
+            let mut tick = tick.clone();
+            move || {
+                if let Some(s) = state_ref.write().as_mut() {
+                    *s = EditorState::new(filename, &initial_content);
+                }
+                tick.set(tick.get().wrapping_add(1));
             }
-            tick.set(tick.get().wrapping_add(1));
-        }
-    }, props.filename.clone());
+        },
+        props.filename.clone(),
+    );
 
     let on_change = props.on_change.clone();
     let cursor_ref = props.cursor_ref;

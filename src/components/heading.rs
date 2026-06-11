@@ -10,6 +10,7 @@ pub struct HeadingProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
@@ -29,6 +30,7 @@ pub fn Heading(props: &HeadingProps, _hooks: Hooks) -> impl Into<AnyElement<'sta
         &props.file_path,
         props.viewport_height,
         props.viewport_width,
+        props.scale,
     );
 
     element! {

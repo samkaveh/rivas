@@ -68,7 +68,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     }
 
     if data_cache.read().is_empty() {
-        let max_w = (3.0 * vw as f32 * props.scale).round() as u32;
+        let max_w = (2.0 * vw as f32 * props.scale).round() as u32;
         let loaded_image = match render_mermaid_to_png(&props.source, max_w) {
             Ok(v) => v,
             Err(e) => {
@@ -85,7 +85,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         let caps = TermCaps::detect().unwrap();
 
         cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-        cols_ = cols_.min((vw as f32 * props.scale).round() as u32);
+        cols_ = cols_.min((2.0 * vw as f32 * props.scale).round() as u32);
         rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
         rows_ = rows_.min(vh);
 

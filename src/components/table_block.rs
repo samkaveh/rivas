@@ -11,6 +11,7 @@ pub struct TableBlockProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
@@ -71,7 +72,7 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                     element! {
                         View(width: col_widths[i], justify_content: justify, padding_left: 1, padding_right: 1) {
                             View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
-                                #(render_inlines(&cell.content, crate::theme::CYAN, true, &props.file_path, props.viewport_height, props.viewport_width))
+                                #(render_inlines(&cell.content, crate::theme::CYAN, true, &props.file_path, props.viewport_height, props.viewport_width, props.scale))
                             }
                         }
                     }.into_any()
@@ -95,7 +96,7 @@ pub fn TableBlock(props: &TableBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                             element! {
                                 View(width: col_widths[col_idx], justify_content: justify, padding_left: 1, padding_right: 1) {
                                     View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
-                                        #(render_inlines(&cell.content, crate::theme::FG, false, &props.file_path, props.viewport_height, props.viewport_width))
+                                        #(render_inlines(&cell.content, crate::theme::FG, false, &props.file_path, props.viewport_height, props.viewport_width, props.scale))
                                     }
                                 }
                             }.into_any()

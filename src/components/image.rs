@@ -11,10 +11,12 @@ pub struct ImageProps {
     pub alt: Option<String>,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
 pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let scale = props.scale.unwrap_or(1.0);
     element! {
         View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
             #(props.title.clone().map(|title| element! {
@@ -23,7 +25,20 @@ pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>
             }
             }))
 
-            KittyImage(url: props.url.clone(),file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
+            View(flex_direction: FlexDirection::Row, gap: 1, margin_bottom: 1) {
+                View(background_color: crate::theme::DARK_BG) {
+                    Text(content: " Image ", weight: Weight::Bold)
+                }
+                View(background_color: crate::theme::STATUS_BG) {
+                    Text(content: " + ", color: crate::theme::FG)
+                }
+                View(background_color: crate::theme::STATUS_BG) {
+                    Text(content: " - ", color: crate::theme::FG)
+                }
+                Text(content: format!(" {:.1}x", scale), color: crate::theme::COMMENT)
+            }
+
+            KittyImage(url: props.url.clone(), file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scale: scale)
         }
     }
 }
@@ -34,6 +49,7 @@ pub struct KittyImageProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: f32,
 }
 
 #[component]
@@ -52,7 +68,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("{}:{}", vw, url);
+    let key = format!("{}:{}:{}", vw, props.scale, url);
 
     if *cache_key.read() != key {
         cache_key.set(key);
@@ -63,7 +79,8 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     }
 
     if data_cache.read().is_empty() {
-        let loaded_image = match load_image_to_png(url.as_str(), base_dir, vw) {
+        let max_w = (vw as f32 * props.scale).round() as u32;
+        let loaded_image = match load_image_to_png(url.as_str(), base_dir, max_w) {
             Ok(v) => v,
             Err(e) => {
                 return element! {
@@ -79,7 +96,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         let caps = TermCaps::detect().unwrap();
 
         cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-        cols_ = cols_.min(vw);
+        cols_ = cols_.min((vw as f32 * props.scale).round() as u32);
         rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
         rows_ = rows_.min(vh);
 

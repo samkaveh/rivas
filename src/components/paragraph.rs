@@ -9,6 +9,7 @@ pub struct ParagraphProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
@@ -20,6 +21,7 @@ pub fn Paragraph(props: &ParagraphProps, _hooks: Hooks) -> impl Into<AnyElement<
         &props.file_path,
         props.viewport_height,
         props.viewport_width,
+        props.scale,
     );
 
     element! {
