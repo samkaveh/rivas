@@ -57,7 +57,10 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("{}:{}:{}", vw, props.scale, props.source);
+
+    // Round scale to 0.1 to avoid cache thrashing on continuous zoom
+    let scale_rounded = (props.scale * 10.0).round() / 10.0;
+    let key = format!("{}:{}:{}", vw, scale_rounded, props.source);
 
     if *cache_key.read() != key {
         cache_key.set(key);

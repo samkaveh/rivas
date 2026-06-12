@@ -8,11 +8,13 @@ use std::path::PathBuf;
 mod assets;
 mod components;
 mod document;
+mod lib_file_cache;
 mod output;
 mod theme;
 
 use crate::components::document::Document;
 use crate::components::editor::NvimEditor;
+use crate::lib_file_cache::FileListCache;
 use skim::prelude::{Skim, SkimItemReader, SkimOptionsBuilder};
 use std::sync::{Arc, Mutex};
 
@@ -317,6 +319,11 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     }
 }
 
+// Global file cache with 5 second TTL (revalidates on each Ctrl+P)
+lazy_static::lazy_static! {
+    static ref FILE_CACHE: FileListCache = FileListCache::new();
+}
+
 fn visit_dirs(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
     if dir.is_dir() {
         for entry in std::fs::read_dir(dir)? {
@@ -344,9 +351,20 @@ fn visit_dirs(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result
     Ok(())
 }
 
+/// Get local files with caching (5 second TTL)
 fn get_local_files() -> Vec<String> {
+    // Check cache first (5 second TTL)
+    if let Some(cached) = FILE_CACHE.get(5) {
+        return cached;
+    }
+
+    // Cache miss - rescan filesystem
     let mut files = Vec::new();
     let _ = visit_dirs(std::path::Path::new("."), &mut files);
+
+    // Store in cache for next call
+    FILE_CACHE.set(files.clone());
+
     files
 }
 

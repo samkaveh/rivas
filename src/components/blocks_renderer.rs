@@ -27,7 +27,6 @@ pub fn BlocksRenderer(
     props: &BlocksRendererProps,
     _hooks: Hooks,
 ) -> impl Into<AnyElement<'static>> {
-    let blocks = props.blocks.clone();
     let file_path = props.file_path.clone();
     let vh = props.viewport_height;
     let vw = props.viewport_width;
@@ -35,7 +34,8 @@ pub fn BlocksRenderer(
 
     element! {
         View(flex_direction: FlexDirection::Column) {
-            #(blocks.iter().map(|block| match block {
+            // Iterate over &props.blocks instead of cloning the entire tree
+            #(props.blocks.iter().map(|block| match block {
                 Block::Heading { level, content, id: _ } => element!{Heading(level: *level, content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw, scale)}.into_any(),
                 Block::Paragraph { content } => element!{Paragraph(content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw, scale)}.into_any(),
                 Block::Code { language, code } => element!{CodeBlock(language: language.clone(), code: code.clone())}.into_any(),

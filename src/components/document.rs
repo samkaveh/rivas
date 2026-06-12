@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use iocraft::prelude::*;
 
 use crate::components::blocks_renderer::BlocksRenderer;
+use crate::document::cache::ParseCache;
 use crate::document::parser::parse_markdown;
 
 #[derive(Default, Props)]
@@ -19,7 +20,16 @@ pub struct DocumentProps {
 #[component]
 pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let content = props.content.clone();
-    let doc = parse_markdown(&content);
+
+    // Use parse cache to memoize markdown parsing
+    let cache = hooks.use_ref(|| ParseCache::new());
+    let doc = if let Some(cached_doc) = cache.read().get(&content) {
+        cached_doc
+    } else {
+        let parsed = parse_markdown(&content);
+        cache.read().insert(&content, parsed.clone());
+        parsed
+    };
 
     let vh = props.viewport_height;
     let vw = props.viewport_width;

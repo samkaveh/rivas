@@ -68,7 +68,10 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("{}:{}:{}", vw, props.scale, url);
+
+    // Round scale to 0.1 to avoid cache thrashing on continuous zoom
+    let scale_rounded = (props.scale * 10.0).round() / 10.0;
+    let key = format!("{}:{}:{}", vw, scale_rounded, url);
 
     if *cache_key.read() != key {
         cache_key.set(key);

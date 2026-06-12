@@ -3698,6 +3698,7 @@ dependencies = [
  "env_logger",
  "image",
  "iocraft",
+ "lazy_static",
  "libc",
  "log",
  "pulldown-cmark",
