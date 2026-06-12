@@ -27,7 +27,58 @@ static NEXT_PLACEMENT_ID: AtomicU32 = AtomicU32::new(1);
 pub fn next_placement_id() -> u32 {
     NEXT_PLACEMENT_ID.fetch_add(1, Ordering::Relaxed) & 0x00FF_FFFF
 }
+pub fn write_to_cropped<W: Write>(
+    w: &mut W,
+    png_data: &[u8],
+    cols: u32,
+    rows: u32,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+) -> u32 {
+    let id = next_placement_id();
+    write_with_id_to_cropped(w, png_data, cols, rows, id, src_x, src_y, src_w, src_h);
+    id
+}
 
+pub fn write_with_id_to_cropped<W: Write>(
+    w: &mut W,
+    png_data: &[u8],
+    cols: u32,
+    rows: u32,
+    id: u32,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+) {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(png_data);
+    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(CHUNK_SIZE).collect();
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let more = if i < chunks.len() - 1 { 1 } else { 0 };
+        let chunk_str = std::str::from_utf8(chunk).unwrap();
+
+        if i == 0 {
+            // x,y: source pixel offset (crop origin)
+            // w,h: source pixel region size (0 = full, so only include if nonzero)
+            let crop = match (src_w > 0 || src_h > 0, src_x > 0 || src_y > 0) {
+                (true, _) => format!(",x={},y={},w={},h={}", src_x, src_y, src_w, src_h),
+                (false, true) => format!(",x={},y={}", src_x, src_y),
+                (false, false) => String::new(),
+            };
+            write!(
+                w,
+                "\x1b_Ga=T,f=100,t=d,i={},c={},r={},m={},q=2{};{}\x1b\\",
+                id, cols, rows, more, crop, chunk_str
+            )
+            .unwrap();
+        } else {
+            write!(w, "\x1b_Gm={};{}\x1b\\", more, chunk_str).unwrap();
+        }
+    }
+}
 pub fn write_with_id_to<W: Write>(w: &mut W, png_data: &[u8], cols: u32, rows: u32, id: u32) {
     let encoded = base64::engine::general_purpose::STANDARD.encode(png_data);
     let chunk_size = CHUNK_SIZE;

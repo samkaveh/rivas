@@ -94,7 +94,15 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     }
 
     let render_image = hooks.use_async_handler(
-        move |(pos, visible, vis_cols, vis_rows): ((i32, i32), bool, i32, i32)| async move {
+        move |(pos, visible, vis_cols, vis_rows, src_y_offset, cell_w, cell_h): (
+            (i32, i32),
+            bool,
+            i32,
+            i32,
+            i32,
+            u32,
+            u32,
+        )| async move {
             if !kitty::is_supported() {
                 return;
             }
@@ -103,11 +111,21 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
                 let (x, y) = pos;
                 write!(stdout, "\x1b7").unwrap();
                 write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-                let new_id = kitty::write_to(
+
+                // Source crop in pixels
+                let src_y_px = src_y_offset as u32 * cell_h;
+                let crop_h_px = vis_rows as u32 * cell_h;
+                let crop_w_px = vis_cols as u32 * cell_w;
+
+                let new_id = kitty::write_to_cropped(
                     &mut stdout,
                     &data_cache.read(),
-                    vis_cols as u32, // clipped
-                    vis_rows as u32, // clipped
+                    vis_cols as u32,
+                    vis_rows as u32,
+                    0,         // src x offset px
+                    src_y_px,  // src y offset px
+                    crop_w_px, // src crop width px
+                    crop_h_px, // src crop height px
                 );
                 image_id.write().set(new_id);
                 write!(stdout, "\x1b8").unwrap();
@@ -123,22 +141,32 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
+            let caps = TermCaps::detect().unwrap();
             let img_cols = *cols.read() as i32;
             let img_rows = *rows.read() as i32;
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let mut visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
 
-            let visible =
-                x >= 0 && (y + visible_rows - 1) >= 0 && visible_cols > 0 && visible_rows > 0;
-            if y < 0 && visible_rows >= 0 {
-                visible_rows = (visible_rows + y).max(0);
-                pos.1 = 0;
-            }
+            // How many rows are scrolled off the top
+            let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
+            let actual_vis_rows = (visible_rows - top_clip_rows).max(0);
+            let render_y = if y < 0 { 0 } else { y };
 
-            render_image((pos, visible, visible_cols, visible_rows));
+            let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
+
+            render_image((
+                (x, render_y),
+                visible,
+                visible_cols,
+                actual_vis_rows,
+                top_clip_rows, // src y offset in cells
+                caps.cell_w_px as u32,
+                caps.cell_h_px as u32,
+            ));
         }
     }
+
     element! {View(width: cols.read().clone(), height: rows.read().clone())}
 }
