@@ -14,10 +14,10 @@ pub fn render_mermaid_to_png(source: &str, max_width: u32) -> Result<(Vec<u8>, u
     line, path { stroke: #CCCCCC !important; }
     </style></defs>"#;
 
-    if let Some(svg_start) = svg.find("<svg") {
-        if let Some(pos) = svg[svg_start..].find('>') {
-            svg.insert_str(svg_start + pos + 1, style_override);
-        }
+    if let Some(svg_start) = svg.find("<svg")
+        && let Some(pos) = svg[svg_start..].find('>')
+    {
+        svg.insert_str(svg_start + pos + 1, style_override);
     }
 
     rasterize_svg_to_png(&svg, max_width)

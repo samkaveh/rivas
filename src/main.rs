@@ -323,28 +323,21 @@ fn visit_dirs(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.')
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && (name.starts_with('.')
                         || name == "target"
                         || name == "node_modules"
                         || name == "build"
                         || name == "dist"
                         || name == "venv"
-                        || name == "env"
-                    {
-                        continue;
-                    }
+                        || name == "env")
+                {
+                    continue;
                 }
                 visit_dirs(&path, files)?;
-            } else {
-                if let Some(path_str) = path.to_str() {
-                    let relative_path = if path_str.starts_with("./") {
-                        path_str[2..].to_string()
-                    } else {
-                        path_str.to_string()
-                    };
-                    files.push(relative_path);
-                }
+            } else if let Some(path_str) = path.to_str() {
+                let relative_path = path_str.strip_prefix("./").unwrap_or(path_str).to_string();
+                files.push(relative_path);
             }
         }
     }
