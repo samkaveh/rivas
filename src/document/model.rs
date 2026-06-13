@@ -85,6 +85,7 @@ pub enum Inline {
     HardBreak,
 }
 
+#[derive(Clone)]
 pub struct Document {
     pub blocks: Vec<Block>,
 }

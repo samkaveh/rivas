@@ -18,18 +18,18 @@ pub struct MermaidBlockProps {
 pub fn MermaidBlock(props: &MermaidBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let scale = props.scale.unwrap_or(1.0);
     element! {
-       View(flex_direction: FlexDirection::Column) {
+       View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
            View(flex_direction: FlexDirection::Row, gap: 1, margin_bottom: 1) {
-               View(background_color: Color::AnsiValue(238)) {
+               View(background_color: crate::theme::DARK_BG) {
                    Text(content: " Mermaid ", weight: Weight::Bold)
                }
-               View(background_color: Color::AnsiValue(240)) {
-                   Text(content: " + ", color: Color::AnsiValue(255))
+               View(background_color: crate::theme::STATUS_BG) {
+                   Text(content: " + ", color: crate::theme::FG)
                }
-               View(background_color: Color::AnsiValue(240)) {
-                   Text(content: " - ", color: Color::AnsiValue(255))
+               View(background_color: crate::theme::STATUS_BG) {
+                   Text(content: " - ", color: crate::theme::FG)
                }
-               Text(content: format!(" {:.1}x", scale), color: Color::AnsiValue(244))
+               Text(content: format!(" {:.1}x", scale), color: crate::theme::COMMENT)
            }
            KittyMermaid(source: props.source.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scale: scale)
        }
@@ -57,7 +57,10 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("{}:{}:{}", vw, props.scale, props.source);
+
+    // Round scale to 0.1 to avoid cache thrashing on continuous zoom
+    let scale_rounded = (props.scale * 10.0).round() / 10.0;
+    let key = format!("{}:{}:{}", vw, scale_rounded, props.source);
 
     if *cache_key.read() != key {
         cache_key.set(key);
@@ -68,7 +71,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     }
 
     if data_cache.read().is_empty() {
-        let max_w = (3.0 * vw as f32 * props.scale).round() as u32;
+        let max_w = (2.0 * vw as f32 * props.scale).round() as u32;
         let loaded_image = match render_mermaid_to_png(&props.source, max_w) {
             Ok(v) => v,
             Err(e) => {
@@ -85,7 +88,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         let caps = TermCaps::detect().unwrap();
 
         cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-        cols_ = cols_.min((vw as f32 * props.scale).round() as u32);
+        cols_ = cols_.min((2.0 * vw as f32 * props.scale).round() as u32);
         rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
         rows_ = rows_.min(vh);
 
@@ -94,7 +97,15 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     }
 
     let render_image = hooks.use_async_handler(
-        move |(pos, visible, vis_cols, vis_rows): ((i32, i32), bool, i32, i32)| async move {
+        move |(pos, visible, vis_cols, vis_rows, src_y_offset, cell_w, cell_h): (
+            (i32, i32),
+            bool,
+            i32,
+            i32,
+            i32,
+            u32,
+            u32,
+        )| async move {
             if !kitty::is_supported() {
                 return;
             }
@@ -103,11 +114,21 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
                 let (x, y) = pos;
                 write!(stdout, "\x1b7").unwrap();
                 write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-                let new_id = kitty::write_to(
+
+                // Source crop in pixels
+                let src_y_px = src_y_offset as u32 * cell_h;
+                let crop_h_px = vis_rows as u32 * cell_h;
+                let crop_w_px = vis_cols as u32 * cell_w;
+
+                let new_id = kitty::write_to_cropped(
                     &mut stdout,
                     &data_cache.read(),
-                    vis_cols as u32, // clipped
-                    vis_rows as u32, // clipped
+                    vis_cols as u32,
+                    vis_rows as u32,
+                    0,         // src x offset px
+                    src_y_px,  // src y offset px
+                    crop_w_px, // src crop width px
+                    crop_h_px, // src crop height px
                 );
                 image_id.write().set(new_id);
                 write!(stdout, "\x1b8").unwrap();
@@ -123,22 +144,32 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
+            let caps = TermCaps::detect().unwrap();
             let img_cols = *cols.read() as i32;
             let img_rows = *rows.read() as i32;
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let mut visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
 
-            let visible =
-                x >= 0 && (y + visible_rows - 1) >= 0 && visible_cols > 0 && visible_rows > 0;
-            if y < 0 && visible_rows >= 0 {
-                visible_rows = (visible_rows + y).max(0);
-                pos.1 = 0;
-            }
+            // How many rows are scrolled off the top
+            let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
+            let actual_vis_rows = (visible_rows - top_clip_rows).max(0);
+            let render_y = if y < 0 { 0 } else { y };
 
-            render_image((pos, visible, visible_cols, visible_rows));
+            let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
+
+            render_image((
+                (x, render_y),
+                visible,
+                visible_cols,
+                actual_vis_rows,
+                top_clip_rows, // src y offset in cells
+                caps.cell_w_px as u32,
+                caps.cell_h_px as u32,
+            ));
         }
     }
+
     element! {View(width: cols.read().clone(), height: rows.read().clone())}
 }

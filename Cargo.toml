@@ -1,6 +1,6 @@
 [package]
 name = "rivas"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 
 [lib]
@@ -19,6 +19,7 @@ crossterm = "0.29.0"
 env_logger = "0.11.10"
 libc = "0.2.185"
 log = "0.4.29"
+lazy_static = "1.4.0"
 pulldown-cmark = "0.13.3"
 syntect = "5.3.0"
 tiny-skia = "0.12.0"
@@ -35,5 +36,6 @@ typst-svg = "0.14.2"
 regex = "1.12.3"
 tylax = "0.3.5"
 iocraft = "0.8.2"
+skim = "4.7.0"
 smol = "2.0.2"
 selkie-rs = "0.3.0"

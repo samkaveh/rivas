@@ -41,15 +41,15 @@ pub fn CodeBlock(props: &CodeBlockProps, _hooks: Hooks) -> impl Into<AnyElement<
                 highlighted_lines.push(line_spans);
             }
             Err(_) => {
-                highlighted_lines.push(vec![(line.to_string(), Color::White)]);
+                highlighted_lines.push(vec![(line.to_string(), crate::theme::FG)]);
             }
         }
     }
 
     element! {
-        View(flex_direction: FlexDirection::Column, padding: 1, margin_bottom: 1, background_color: Color::Rgb{r: 26, g: 27, b: 30}) {
-            View(margin_bottom: 1) {
-                Text(content: lang_label, color: Color::Blue)
+        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, margin_bottom: 1, background_color: crate::theme::DARK_BG) {
+            View() {
+                Text(content: lang_label, color: crate::theme::BLUE)
             }
             View(flex_direction: FlexDirection::Column) {
                 #(highlighted_lines.iter().map(|line_spans| {

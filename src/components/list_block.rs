@@ -11,6 +11,7 @@ pub struct ListBlockProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
@@ -32,15 +33,16 @@ pub fn ListBlock(props: &ListBlockProps, _hooks: Hooks) -> impl Into<AnyElement<
 
                 element! {
                     View(flex_direction: FlexDirection::Row) {
-                        View(width: 4, padding_top: 1) {
-                            Text(content: format!("{} ", marker), color: Color::Yellow)
+                        View(width: 4) {
+                            Text(content: format!("{} ", marker), color: crate::theme::YELLOW)
                         }
                         View(flex_grow: 1.0) {
                             BlocksRenderer(
                                 blocks: item.content.clone(),
                                 file_path: props.file_path.clone(),
                                 viewport_height: props.viewport_height,
-                                viewport_width: props.viewport_width
+                                viewport_width: props.viewport_width,
+                                scale: props.scale
                             )
                         }
                     }

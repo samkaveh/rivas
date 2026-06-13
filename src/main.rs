@@ -8,10 +8,24 @@ use std::path::PathBuf;
 mod assets;
 mod components;
 mod document;
+mod lib_file_cache;
 mod output;
+mod theme;
 
 use crate::components::document::Document;
 use crate::components::editor::NvimEditor;
+use crate::lib_file_cache::FileListCache;
+use skim::prelude::{Skim, SkimItemReader, SkimOptionsBuilder};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+enum AppAction {
+    #[default]
+    Quit,
+    SearchFile {
+        edit_mode: bool,
+    },
+}
 
 #[derive(Parser)]
 #[command(
@@ -33,7 +47,7 @@ fn main() -> Result<()> {
     env_logger::init();
     let cli = Cli::parse();
 
-    let (content, file_path) = match &cli.file {
+    let (mut content, mut file_path) = match &cli.file {
         // CASE 1: User provided a path
         Some(path) => {
             if !path.exists() {
@@ -71,9 +85,47 @@ fn main() -> Result<()> {
         anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
     }
 
-    smol::block_on(
-        element!(App(file_path, content: content.as_str(), edit: cli.edit)).fullscreen(),
-    )?;
+    let action = Arc::new(Mutex::new(AppAction::Quit));
+    let mut edit_mode = cli.edit;
+
+    loop {
+        *action.lock().unwrap() = AppAction::Quit;
+
+        smol::block_on(
+            element!(App(
+                file_path: file_path.clone(),
+                content: content.as_str(),
+                edit: edit_mode,
+                action: action.clone(),
+            ))
+            .fullscreen(),
+        )?;
+
+        let next_action = action.lock().unwrap().clone();
+        match next_action {
+            AppAction::Quit => break,
+            AppAction::SearchFile {
+                edit_mode: final_edit_mode,
+            } => {
+                edit_mode = final_edit_mode;
+                if let Some(selected) = run_fuzzy_finder() {
+                    // Auto-save current file if it exists and content is modified
+                    if let Some(ref path) = file_path {
+                        if let Ok(on_disk) = fs::read_to_string(path) {
+                            if on_disk != content {
+                                let _ = fs::write(path, &content);
+                            }
+                        }
+                    }
+                    if let Ok(new_content) = fs::read_to_string(&selected) {
+                        content = new_content;
+                        file_path = Some(selected);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -82,6 +134,7 @@ struct AppProps<'a> {
     file_path: Option<PathBuf>,
     content: &'a str,
     edit: bool,
+    action: Arc<Mutex<AppAction>>,
 }
 
 #[component]
@@ -106,24 +159,45 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         let mut should_exit = should_exit.clone();
         let mut edit_mode = edit_mode.clone();
         let mut mouse_captured = mouse_captured.clone();
+        let action = props.action.clone();
         move |event| match event {
             TerminalEvent::Key(KeyEvent {
                 code,
-                modifiers: _,
+                modifiers,
                 kind,
                 ..
-            }) if kind != KeyEventKind::Release => match code {
-                KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
-                KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
-                KeyCode::Char('m') => mouse_captured.set(true),
-                KeyCode::Char('+') | KeyCode::Char('=') if !edit_mode.get() => {
-                    mermaid_scale.set(mermaid_scale.get() + 0.1);
+            }) if kind != KeyEventKind::Release => {
+                let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+                if ctrl && code == KeyCode::Char('p') {
+                    *action.lock().unwrap() = AppAction::SearchFile {
+                        edit_mode: edit_mode.get(),
+                    };
+                    should_exit.set(true);
+                    return;
                 }
-                KeyCode::Char('-') if !edit_mode.get() => {
-                    mermaid_scale.set((mermaid_scale.get() - 0.1).max(0.1));
+                match code {
+                    KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
+                    KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
+                    KeyCode::Char('m') => mouse_captured.set(true),
+                    KeyCode::Char('+') | KeyCode::Char('=') if !edit_mode.get() => {
+                        let max_scale = 3.0f32; // upper cap
+                        let current = mermaid_scale.get();
+                        let next = (current + 0.1).min(max_scale);
+                        if (next - current).abs() > f32::EPSILON {
+                            mermaid_scale.set(next);
+                        }
+                    }
+                    KeyCode::Char('-') if !edit_mode.get() => {
+                        let min_scale = 0.1f32;
+                        let current = mermaid_scale.get();
+                        let next = (current - 0.1).max(min_scale);
+                        if (next - current).abs() > f32::EPSILON {
+                            mermaid_scale.set(next);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     });
@@ -184,19 +258,19 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                         on_view
                     )
                 }
-                View(width: 1, height, background_color: Color::AnsiValue(238)) {}
+                View(width: 1, height, background_color: crate::theme::BORDER) {}
                 View(width: preview_width.saturating_sub(1), height, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
                     Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line), scale: Some(mermaid_scale.get()))
-                    View(width: 100pct, background_color: Color::AnsiValue(238)) {
-                        Text(content: " PREVIEW ", color: Color::AnsiValue(250), weight: Weight::Bold)
+                    View(width: 100pct, background_color: crate::theme::STATUS_BG) {
+                        Text(content: " PREVIEW ", color: crate::theme::FG, weight: Weight::Bold)
                     }
                     View(width: 100pct) {
-                        Text(content: " :view returns to rendered view ", color: Color::AnsiValue(242))
+                        Text(content: " :view returns to rendered view ", color: crate::theme::COMMENT)
                     }
-                    View(width: 100pct, background_color: Color::AnsiValue(234), flex_direction: FlexDirection::Row) {
-                        Text(content: " live markdown preview ", color: Color::AnsiValue(242))
+                    View(width: 100pct, background_color: crate::theme::DARK_BG, flex_direction: FlexDirection::Row) {
+                        Text(content: " live markdown preview ", color: crate::theme::COMMENT)
                         View(flex_grow: 1.0) {}
-                        Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: Color::AnsiValue(242))
+                        Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
                     }
                 }
             }
@@ -205,38 +279,115 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         element! {
             View(flex_direction: FlexDirection::Column,  width, height) {
                 Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(1) as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None, scale: Some(mermaid_scale.get()))
-                View(width: 100pct, height: 1, background_color: Color::AnsiValue(236), flex_direction: FlexDirection::Row) {
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " q ", color: Color::Black)
+                View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " q ", color: crate::theme::FG)
                     }
                     Text(content: " Quit ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " e ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " e ", color: crate::theme::FG)
                     }
                     Text(content: " Edit ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " j/k ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " C-p ", color: crate::theme::FG)
+                    }
+                    Text(content: " Find ")
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " j/k ", color: crate::theme::FG)
                     }
                     Text(content: " Scroll ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " gg/G ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " gg/G ", color: crate::theme::FG)
                     }
                     Text(content: " Top/Bottom ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " + ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " + ", color: crate::theme::FG)
                     }
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " - ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " - ", color: crate::theme::FG)
                     }
                     Text(content: " Zoom ")
-                    View(background_color: Color::AnsiValue(244)) {
-                        Text(content: " m ", color: Color::Black)
+                    View(background_color: crate::theme::DARK_GREY) {
+                        Text(content: " m ", color: crate::theme::FG)
                     }
                     Text(content: " Mouse ")
                     View(flex_grow: 1.0) {}
-                    Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: Color::AnsiValue(245))
+                    Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
                 }
             }
         }
     }
+}
+
+// Global file cache with 5 second TTL (revalidates on each Ctrl+P)
+lazy_static::lazy_static! {
+    static ref FILE_CACHE: FileListCache = FileListCache::new();
+}
+
+fn visit_dirs(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && (name.starts_with('.')
+                        || name == "target"
+                        || name == "node_modules"
+                        || name == "build"
+                        || name == "dist"
+                        || name == "venv"
+                        || name == "env")
+                {
+                    continue;
+                }
+                visit_dirs(&path, files)?;
+            } else if let Some(path_str) = path.to_str() {
+                let relative_path = path_str.strip_prefix("./").unwrap_or(path_str).to_string();
+                files.push(relative_path);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Get local files with caching (5 second TTL)
+fn get_local_files() -> Vec<String> {
+    // Check cache first (5 second TTL)
+    if let Some(cached) = FILE_CACHE.get(5) {
+        return cached;
+    }
+
+    // Cache miss - rescan filesystem
+    let mut files = Vec::new();
+    let _ = visit_dirs(std::path::Path::new("."), &mut files);
+
+    // Store in cache for next call
+    FILE_CACHE.set(files.clone());
+
+    files
+}
+
+fn run_fuzzy_finder() -> Option<PathBuf> {
+    let files = get_local_files();
+    let input = files.join("\n");
+
+    let options = SkimOptionsBuilder::default()
+        .height("40%".to_string())
+        .multi(false)
+        .prompt("Find File> ".to_string())
+        .build()
+        .unwrap();
+
+    let item_reader = SkimItemReader::default();
+    let items = item_reader.of_bufread(std::io::Cursor::new(input));
+
+    let output = Skim::run_with(options, Some(items)).ok()?;
+
+    if output.is_abort {
+        return None;
+    }
+
+    let selected = output.selected_items.first()?;
+    Some(PathBuf::from(selected.output().to_string()))
 }

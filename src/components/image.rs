@@ -11,21 +11,34 @@ pub struct ImageProps {
     pub alt: Option<String>,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
 pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let scale = props.scale.unwrap_or(1.0);
     element! {
-        View(flex_direction: FlexDirection::Column, padding: 1) {
+        View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
             #(props.title.clone().map(|title| element! {
-            View(margin_bottom: 1) {
-                Text(content: title, color: Color::DarkGrey)
+            View() {
+                Text(content: title, color: crate::theme::COMMENT)
             }
             }))
 
-            View(margin_bottom: 1) {
-            KittyImage(url: props.url.clone(),file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
+            View(flex_direction: FlexDirection::Row, gap: 1, margin_bottom: 1) {
+                View(background_color: crate::theme::DARK_BG) {
+                    Text(content: " Image ", weight: Weight::Bold)
+                }
+                View(background_color: crate::theme::STATUS_BG) {
+                    Text(content: " + ", color: crate::theme::FG)
+                }
+                View(background_color: crate::theme::STATUS_BG) {
+                    Text(content: " - ", color: crate::theme::FG)
+                }
+                Text(content: format!(" {:.1}x", scale), color: crate::theme::COMMENT)
             }
+
+            KittyImage(url: props.url.clone(), file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scale: scale)
         }
     }
 }
@@ -36,6 +49,7 @@ pub struct KittyImageProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: f32,
 }
 
 #[component]
@@ -54,7 +68,10 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("{}:{}", vw, url);
+
+    // Round scale to 0.1 to avoid cache thrashing on continuous zoom
+    let scale_rounded = (props.scale * 10.0).round() / 10.0;
+    let key = format!("{}:{}:{}", vw, scale_rounded, url);
 
     if *cache_key.read() != key {
         cache_key.set(key);
@@ -65,7 +82,8 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     }
 
     if data_cache.read().is_empty() {
-        let loaded_image = match load_image_to_png(url.as_str(), base_dir, vw) {
+        let max_w = (vw as f32 * props.scale).round() as u32;
+        let loaded_image = match load_image_to_png(url.as_str(), base_dir, max_w) {
             Ok(v) => v,
             Err(e) => {
                 return element! {
@@ -81,7 +99,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         let caps = TermCaps::detect().unwrap();
 
         cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-        cols_ = cols_.min(vw);
+        cols_ = cols_.min((vw as f32 * props.scale).round() as u32);
         rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
         rows_ = rows_.min(vh);
 
@@ -90,7 +108,15 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     }
 
     let render_image = hooks.use_async_handler(
-        move |(pos, visible, vis_cols, vis_rows): ((i32, i32), bool, i32, i32)| async move {
+        move |(pos, visible, vis_cols, vis_rows, src_y_offset, cell_w, cell_h): (
+            (i32, i32),
+            bool,
+            i32,
+            i32,
+            i32,
+            u32,
+            u32,
+        )| async move {
             if !kitty::is_supported() {
                 return;
             }
@@ -99,11 +125,21 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                 let (x, y) = pos;
                 write!(stdout, "\x1b7").unwrap();
                 write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-                let new_id = kitty::write_to(
+
+                // Source crop in pixels
+                let src_y_px = src_y_offset as u32 * cell_h;
+                let crop_h_px = vis_rows as u32 * cell_h;
+                let crop_w_px = vis_cols as u32 * cell_w;
+
+                let new_id = kitty::write_to_cropped(
                     &mut stdout,
                     &data_cache.read(),
-                    vis_cols as u32, // clipped
-                    vis_rows as u32, // clipped
+                    vis_cols as u32,
+                    vis_rows as u32,
+                    0,         // src x offset px
+                    src_y_px,  // src y offset px
+                    crop_w_px, // src crop width px
+                    crop_h_px, // src crop height px
                 );
                 image_id.write().set(new_id);
                 write!(stdout, "\x1b8").unwrap();
@@ -113,26 +149,36 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
             stdout.flush().unwrap();
         },
     );
+
     if let Some(r) = rect {
         let mut pos = (r.left, r.top);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
+            let caps = TermCaps::detect().unwrap();
             let img_cols = *cols.read() as i32;
             let img_rows = *rows.read() as i32;
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let mut visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
 
-            let visible =
-                x >= 0 && (y + visible_rows - 1) >= 0 && visible_cols > 0 && visible_rows > 0;
-            if y < 0 && visible_rows >= 0 {
-                visible_rows = (visible_rows + y).max(0);
-                pos.1 = 0;
-            }
+            // How many rows are scrolled off the top
+            let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
+            let actual_vis_rows = (visible_rows - top_clip_rows).max(0);
+            let render_y = if y < 0 { 0 } else { y };
 
-            render_image((pos, visible, visible_cols, visible_rows));
+            let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
+
+            render_image((
+                (x, render_y),
+                visible,
+                visible_cols,
+                actual_vis_rows,
+                top_clip_rows, // src y offset in cells
+                caps.cell_w_px as u32,
+                caps.cell_h_px as u32,
+            ));
         }
     }
 

@@ -9,21 +9,23 @@ pub struct QuoteBlockProps {
     pub file_path: Option<PathBuf>,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
 pub fn QuoteBlock(props: &QuoteBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let file_path = props.file_path.clone().unwrap_or_default();
     element! {
-        View(flex_direction: FlexDirection::Row, padding: 1, margin_bottom: 1, padding_left: 2, background_color: Color::DarkGrey) {
+        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 1, margin_bottom: 1, background_color: crate::theme::DARK_BG) {
             View() {
-                Text(content: " ▎".to_string(), color: Color::White)
+                Text(content: " ▎ ".to_string(), color: crate::theme::TEAL)
             }
             BlocksRenderer(
                 blocks: props.children.clone(),
                 file_path: file_path,
                 viewport_height: props.viewport_height,
-                viewport_width: props.viewport_width
+                viewport_width: props.viewport_width,
+                scale: props.scale
             )
         }
     }

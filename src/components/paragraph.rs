@@ -9,21 +9,23 @@ pub struct ParagraphProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scale: Option<f32>,
 }
 
 #[component]
 pub fn Paragraph(props: &ParagraphProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let styled_elements = render_inlines(
         &props.content,
-        Color::White,
+        crate::theme::FG,
         false,
         &props.file_path,
         props.viewport_height,
         props.viewport_width,
+        props.scale,
     );
 
     element! {
-        View(padding: 1, margin_bottom: 1, flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
+        View(margin_bottom: 1, flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
             #(styled_elements)
         }
     }
