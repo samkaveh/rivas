@@ -153,6 +153,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let edit_mode = hooks.use_state(|| props.edit);
     let mermaid_scale = hooks.use_state(|| 1.0f32);
     let editor_line = hooks.use_ref(|| 0usize);
+    let cursor_offset = hooks.use_ref(|| 0usize);
 
     hooks.use_terminal_events({
         let mut mermaid_scale = mermaid_scale.clone();
@@ -255,12 +256,13 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                         viewport_height: height,
                         on_change,
                         cursor_ref: Some(editor_line),
+                        cursor_offset: Some(cursor_offset),
                         on_view
                     )
                 }
                 View(width: 1, height, background_color: crate::theme::BORDER) {}
                 View(width: preview_width.saturating_sub(1), height, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
-                    Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line), scale: Some(mermaid_scale.get()))
+                    Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line), cursor_offset: Some(cursor_offset), scale: Some(mermaid_scale.get()))
                     View(width: 100pct, background_color: crate::theme::STATUS_BG) {
                         Text(content: " PREVIEW ", color: crate::theme::FG, weight: Weight::Bold)
                     }
@@ -278,7 +280,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     } else {
         element! {
             View(flex_direction: FlexDirection::Column,  width, height) {
-                Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(1) as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None, scale: Some(mermaid_scale.get()))
+                Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(1) as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None, cursor_offset: Some(cursor_offset), scale: Some(mermaid_scale.get()))
                 View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
                     View(background_color: crate::theme::DARK_GREY) {
                         Text(content: " q ", color: crate::theme::FG)

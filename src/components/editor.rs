@@ -452,6 +452,15 @@ impl EditorState {
             .clamp_col(self.row, self.col, self.mode == Mode::Insert);
     }
 
+    fn absolute_byte_offset(&self) -> usize {
+        let mut offset = 0;
+        for i in 0..self.row {
+            offset += self.buf.line(i).len() + 1; // +1 for \n
+        }
+        offset += self.buf.byte_offset(self.row, self.col);
+        offset
+    }
+
     fn scroll_to_cursor(&mut self) {
         if self.row < self.scroll {
             self.scroll = self.row;
@@ -1521,6 +1530,7 @@ pub struct NvimEditorProps {
     pub viewport_height: u16,
     pub on_change: Handler<String>,
     pub cursor_ref: Option<Ref<usize>>,
+    pub cursor_offset: Option<Ref<usize>>,
     pub on_view: Handler<()>,
 }
 
@@ -1561,6 +1571,7 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
         let mut state_ref = state_ref.clone();
         let mut tick = tick;
         let mut should_quit = should_quit;
+        let cursor_offset = props.cursor_offset.clone();
         move |ev| {
             if let TerminalEvent::Resize(w, h) = &ev {
                 if let Some(s) = state_ref.write().as_mut() {
@@ -1609,6 +1620,9 @@ pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<An
             }
             if let (Some(mut cursor_ref), Some(row)) = (cursor_ref, cursor_row) {
                 cursor_ref.set(row);
+            }
+            if let (Some(mut cursor_off_ref), Some(s)) = (cursor_offset.clone(), state_ref.write().as_ref()) {
+                cursor_off_ref.set(s.absolute_byte_offset());
             }
             if request_view {
                 on_view(());

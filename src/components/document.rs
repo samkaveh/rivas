@@ -14,6 +14,7 @@ pub struct DocumentProps {
     pub viewport_width: Option<u32>,
     pub keyboard_navigation: Option<bool>,
     pub follow_ref: Option<Ref<usize>>,
+    pub cursor_offset: Option<Ref<usize>>,
     pub scale: Option<f32>,
 }
 
@@ -42,6 +43,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     hooks.use_terminal_events({
         let mut scroll_handle = scroll_handle;
         let content = content.clone();
+        let cursor_offset = props.cursor_offset.clone();
         move |event| {
             let TerminalEvent::Key(KeyEvent {
                 code,
@@ -81,6 +83,26 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             let page = viewport_height.max(1);
             let half_page = (page / 2).max(1);
 
+            let mut update_scroll = |current_off: usize| {
+                let line_num = content[..current_off].split('\n').count() - 1;
+                let total_lines = content.lines().count().max(1);
+                let vh = vh.unwrap_or(0) as i32;
+                let ch = scroll_handle.read().content_height() as i32;
+
+                if line_num == 0 {
+                    scroll_handle.write().scroll_to_top();
+                } else if line_num + 1 >= total_lines {
+                    scroll_handle.write().scroll_to_bottom();
+                } else if ch > 0 {
+                    let proportion = line_num as f32 / total_lines as f32;
+                    let offset = (proportion * ch as f32) as i32 - (vh / 2);
+                    scroll_handle.write().scroll_to(offset.max(0));
+                } else {
+                    let offset = line_num as i32 - (vh / 2);
+                    scroll_handle.write().scroll_to(offset.max(0));
+                }
+            };
+
             match code {
                 KeyCode::Char('g') if !ctrl && pending_g.get() => {
                     scroll_handle.write().scroll_to_top();
@@ -97,20 +119,124 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     scroll_handle.write().scroll_to_bottom();
                     pending_g.set(false);
                 }
+                KeyCode::Char('h') if !ctrl => {
+                    if let Some(mut cursor_offset) = cursor_offset.clone() {
+                        let current_off = cursor_offset.get();
+                        let next_off = content.char_indices()
+                            .filter(|&(i, _)| i < current_off)
+                            .last()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        cursor_offset.set(next_off);
+                        update_scroll(next_off);
+                    }
+                    pending_g.set(false);
+                }
+                KeyCode::Char('l') if !ctrl => {
+                    if let Some(mut cursor_offset) = cursor_offset.clone() {
+                        let current_off = cursor_offset.get();
+                        let next_off = content.char_indices()
+                            .find(|&(i, _)| i > current_off)
+                            .map(|(i, _)| i)
+                            .unwrap_or(content.len());
+                        cursor_offset.set(next_off);
+                        update_scroll(next_off);
+                    }
+                    pending_g.set(false);
+                }
                 KeyCode::Char('j') if !ctrl => {
-                    scroll_handle.write().scroll_by(1);
+                    // Move cursor forward by one line
+                    if let Some(mut cursor_offset) = cursor_offset.clone() {
+                        let current_off = cursor_offset.get();
+                        let content_bytes = content.as_bytes();
+                        let mut next_off = current_off;
+                        
+                        // Find the start of the next line
+                        while next_off < content_bytes.len() && content_bytes[next_off] != b'\n' {
+                            next_off += 1;
+                        }
+                        if next_off < content_bytes.len() {
+                            next_off += 1; // skip \n
+                        }
+                        cursor_offset.set(next_off.min(content_bytes.len()));
+                        update_scroll(next_off.min(content_bytes.len()));
+                    }
                     pending_g.set(false);
                 }
                 KeyCode::Down => {
-                    scroll_handle.write().scroll_by(1);
+                    // Same as 'j'
+                    if let Some(mut cursor_offset) = cursor_offset.clone() {
+                        let current_off = cursor_offset.get();
+                        let content_bytes = content.as_bytes();
+                        let mut next_off = current_off;
+                        
+                        while next_off < content_bytes.len() && content_bytes[next_off] != b'\n' {
+                            next_off += 1;
+                        }
+                        if next_off < content_bytes.len() {
+                            next_off += 1; // skip \n
+                        }
+                        cursor_offset.set(next_off.min(content_bytes.len()));
+                        update_scroll(next_off.min(content_bytes.len()));
+                    }
                     pending_g.set(false);
                 }
                 KeyCode::Char('k') if !ctrl => {
-                    scroll_handle.write().scroll_by(-1);
+                    // Move cursor backward by one line
+                    if let Some(mut cursor_offset) = cursor_offset.clone() {
+                        let current_off = cursor_offset.get();
+                        let content_bytes = content.as_bytes();
+                        
+                        if current_off == 0 {
+                            cursor_offset.set(0);
+                            update_scroll(0);
+                        } else {
+                            let mut prev_off = current_off - 1;
+                            // If we are at the start of a line, we need to go back further to find the previous \n
+                            if prev_off > 0 && content_bytes[prev_off] == b'\n' {
+                                prev_off -= 1;
+                            }
+                            while prev_off > 0 && content_bytes[prev_off] != b'\n' {
+                                prev_off -= 1;
+                            }
+                            if prev_off > 0 && content_bytes[prev_off] == b'\n' {
+                                prev_off += 1; // start of the line
+                            } else if prev_off == 0 {
+                                prev_off = 0;
+                            }
+                            cursor_offset.set(prev_off);
+                            update_scroll(prev_off);
+                        }
+                    }
                     pending_g.set(false);
                 }
                 KeyCode::Up => {
-                    scroll_handle.write().scroll_by(-1);
+                    // Same as 'k'
+                    if let Some(mut cursor_offset) = cursor_offset.clone() {
+                        let current_off = cursor_offset.get();
+                        let content_bytes = content.as_bytes();
+                        
+                        if current_off == 0 {
+                            cursor_offset.set(0);
+                            update_scroll(0);
+                        } else {
+                            let mut prev_off = current_off - 1;
+                            // If we are at the start of a line, we need to go back further to find the previous \n
+                            if prev_off > 0 && content_bytes[prev_off] == b'\n' {
+                                prev_off -= 1;
+                            }
+                            while prev_off > 0 && content_bytes[prev_off] != b'\n' {
+                                prev_off -= 1;
+                            }
+                            if prev_off > 0 && content_bytes[prev_off] == b'\n' {
+                                prev_off += 1; // start of the line
+                            } else if prev_off == 0 {
+                                prev_off = 0;
+                            }
+                            cursor_offset.set(prev_off);
+                            update_scroll(prev_off);
+                        }
+                    }
                     pending_g.set(false);
                 }
                 KeyCode::Char('d') if ctrl => {
@@ -162,9 +288,11 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_top: 1, padding_bottom: 1) {
                         BlocksRenderer(
                             blocks: doc.blocks,
+                            content: content.clone(),
                             file_path: file_path,
                             viewport_height: vh,
                             viewport_width: vw,
+                            cursor_offset: props.cursor_offset.clone(),
                             scale
                         )
                     }

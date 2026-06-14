@@ -75,7 +75,24 @@ pub enum Alignment {
     None,
 }
 
-/// Inline elements
+impl Block {
+    pub fn span(&self) -> (usize, usize) {
+        match self {
+            Block::Heading { span, .. } => *span,
+            Block::Paragraph { span, .. } => *span,
+            Block::Code { span, .. } => *span,
+            Block::Mermaid { span, .. } => *span,
+            Block::Math { span, .. } => *span,
+            Block::Quote { span, .. } => *span,
+            Block::List { span, .. } => *span,
+            Block::Table { span, .. } => *span,
+            Block::ThematicBreak { span } => *span,
+            Block::Image { span, .. } => *span,
+            Block::Html { span, .. } => *span,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Inline {
     Text(String),
