@@ -198,7 +198,13 @@ impl Buffer {
         (row, c.min(chars.len().saturating_sub(1)))
     }
 
-    pub fn find_forward(&self, row: usize, col: usize, target: char, before: bool) -> Option<usize> {
+    pub fn find_forward(
+        &self,
+        row: usize,
+        col: usize,
+        target: char,
+        before: bool,
+    ) -> Option<usize> {
         let chars: Vec<char> = self.line(row).chars().collect();
         for i in (col + 1)..chars.len() {
             if chars[i] == target {
@@ -208,7 +214,13 @@ impl Buffer {
         None
     }
 
-    pub fn find_backward(&self, row: usize, col: usize, target: char, before: bool) -> Option<usize> {
+    pub fn find_backward(
+        &self,
+        row: usize,
+        col: usize,
+        target: char,
+        before: bool,
+    ) -> Option<usize> {
         if col == 0 {
             return None;
         }
@@ -302,7 +314,9 @@ pub enum Mode {
     Insert,
     Visual,
     Command,
-    Search { forward: bool },
+    Search {
+        forward: bool,
+    },
 }
 
 impl Mode {
@@ -1527,4 +1541,3 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
     s.clamp();
     false
 }
-

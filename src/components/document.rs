@@ -25,15 +25,27 @@ pub struct DocumentProps {
 pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let content_prop = props.content.clone();
 
-    let mut editor_state = hooks.use_ref(|| {
-        Some(EditorState::new(props.file_path.to_string_lossy().to_string(), &content_prop))
+    let editor_state = hooks.use_ref(|| {
+        Some(EditorState::new(
+            props.file_path.to_string_lossy().to_string(),
+            &content_prop,
+        ))
     });
 
     // Use the editor_state for rendering status and passing to blocks_renderer
     let state_guard = editor_state.read();
-    let current_mode = state_guard.as_ref().map(|s| s.mode.clone()).unwrap_or(Mode::Normal);
-    let current_msg = state_guard.as_ref().map(|s| s.message.clone()).unwrap_or_default();
-    let current_cmd = state_guard.as_ref().map(|s| s.cmd_buf.clone()).unwrap_or_default();
+    let current_mode = state_guard
+        .as_ref()
+        .map(|s| s.mode.clone())
+        .unwrap_or(Mode::Normal);
+    let current_msg = state_guard
+        .as_ref()
+        .map(|s| s.message.clone())
+        .unwrap_or_default();
+    let current_cmd = state_guard
+        .as_ref()
+        .map(|s| s.cmd_buf.clone())
+        .unwrap_or_default();
     drop(state_guard);
 
     // To trigger re-renders on edit
@@ -57,7 +69,11 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
 
     // Use parse cache to memoize markdown parsing
     let cache = hooks.use_ref(|| ParseCache::new());
-    let current_content = editor_state.read().as_ref().map(|s| s.buf.to_text()).unwrap_or_default();
+    let current_content = editor_state
+        .read()
+        .as_ref()
+        .map(|s| s.buf.to_text())
+        .unwrap_or_default();
     let doc = if let Some(cached_doc) = cache.read().get(&current_content) {
         cached_doc
     } else {
@@ -69,10 +85,10 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     let vh = props.viewport_height;
     let vw = props.viewport_width;
     let scale = props.scale;
-    let keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
+    let _keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
     let scroll_handle = hooks.use_ref_default::<ScrollViewHandle>();
     let mut pending_g = hooks.use_state(|| false);
-    let follow_ref = props.follow_ref;
+    let _follow_ref = props.follow_ref;
     let on_change = props.on_change.clone();
     let on_quit = props.on_quit.clone();
 
@@ -100,7 +116,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             }
 
             let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-            
+
             // Handle editing
             let mut quit = false;
             let mut changed = false;
@@ -115,7 +131,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     changed = true;
                     on_change(after);
                 }
-                
+
                 // Update global cursor offset
                 if let Some(mut off_ref) = cursor_offset.clone() {
                     off_ref.set(s.absolute_byte_offset());
@@ -138,23 +154,42 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             let half_page = (page / 2).max(1);
 
             let mut update_scroll = |current_row: usize| {
-                let total_lines = content.lines().count().max(1);
+                let state_guard = editor_state.read();
+                let total_logical_lines = state_guard
+                    .as_ref()
+                    .map(|s| s.buf.line_count())
+                    .unwrap_or(1);
+                drop(state_guard);
+
                 let vh = vh.unwrap_or(0) as i32;
                 let ch = scroll_handle.read().content_height() as i32;
 
-                if current_row == 0 {
-                    scroll_handle.write().scroll_to_top();
-                } else if current_row + 1 >= total_lines {
-                    scroll_handle.write().scroll_to_bottom();
-                } else if ch > 0 {
-                    // Use a simpler scroll to keep the cursor in view instead of proportional
-                    // since visual wrapping makes proportions inaccurate.
-                    let offset = current_row as i32 - (vh / 2);
-                    scroll_handle.write().scroll_to(offset.max(0));
-                } else {
-                    let offset = current_row as i32 - (vh / 2);
-                    scroll_handle.write().scroll_to(offset.max(0));
+                if ch <= vh {
+                    return;
                 }
+
+                // 1. Explicit Boundary Handling
+                if current_row == 0 {
+                    scroll_handle.write().scroll_to(0);
+                    return;
+                }
+                if current_row >= total_logical_lines - 1 {
+                    scroll_handle.write().scroll_to(ch - vh);
+                    return;
+                }
+
+                // 2. Proportional Centering
+                // Use total_logical_lines - 1 to ensure the last line maps to 1.0
+                let proportion = current_row as f32 / (total_logical_lines.max(2) - 1) as f32;
+                let visual_offset = (proportion * ch as f32) as i32;
+
+                // Center the cursor in the viewport
+                let target_scroll = visual_offset - (vh / 2);
+
+                // Clamp to valid range [0, content_height - viewport_height]
+                scroll_handle
+                    .write()
+                    .scroll_to(target_scroll.max(0).min(ch - vh));
             };
 
             if let Some(row) = cursor_row {
@@ -189,7 +224,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     scroll_handle.write().scroll_by(page);
                     pending_g.set(false);
                 }
-                KeyCode::PageDown | KeyCode::Char(' ') => {
+                KeyCode::PageDown => {
                     scroll_handle.write().scroll_by(page);
                     pending_g.set(false);
                 }

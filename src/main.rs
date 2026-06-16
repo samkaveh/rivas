@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     }
 
     let action = Arc::new(Mutex::new(AppAction::Quit));
-    let mut edit_mode = cli.edit;
+    let _edit_mode = cli.edit;
 
     loop {
         *action.lock().unwrap() = AppAction::Quit;
@@ -135,7 +135,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let mut system = hooks.use_context_mut::<SystemContext>();
     let should_exit = hooks.use_state(|| false);
     let path = props.file_path.clone().unwrap_or_default();
-    let path_name = path
+    let _path_name = path
         .to_str()
         .filter(|name| !name.is_empty())
         .unwrap_or("untitled.md")
@@ -164,7 +164,6 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     return;
                 }
                 match code {
-                    KeyCode::Char('q') => should_exit.set(true),
                     KeyCode::Char('m') => mouse_captured.set(true),
                     KeyCode::Char('+') | KeyCode::Char('=') => {
                         let max_scale = 3.0f32; // upper cap
@@ -244,7 +243,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             )
             View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
                 View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " q ", color: crate::theme::FG)
+                    Text(content: " :q ", color: crate::theme::FG)
                 }
                 Text(content: " Quit ")
                 View(background_color: crate::theme::DARK_GREY) {
