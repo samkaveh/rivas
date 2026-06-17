@@ -16,7 +16,6 @@ pub struct DocumentProps {
     pub keyboard_navigation: Option<bool>,
     pub follow_ref: Option<Ref<usize>>,
     pub cursor_offset: Option<Ref<usize>>,
-    pub scale: Option<f32>,
     pub on_change: Handler<String>,
     pub on_quit: Handler<()>,
 }
@@ -84,7 +83,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
 
     let vh = props.viewport_height;
     let vw = props.viewport_width;
-    let scale = props.scale;
     let _keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
     let scroll_handle = hooks.use_ref_default::<ScrollViewHandle>();
     let mut pending_g = hooks.use_state(|| false);
@@ -266,7 +264,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                             viewport_height: vh,
                             viewport_width: vw,
                             cursor_offset: props.cursor_offset.clone(),
-                            scale,
                             editor_state: Some(editor_state.clone()),
                         )
                     }
