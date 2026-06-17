@@ -22,12 +22,12 @@ use std::collections::{HashMap, VecDeque};
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
-struct Buffer {
-    lines: Vec<String>,
+pub struct Buffer {
+    pub lines: Vec<String>,
 }
 
 impl Buffer {
-    fn new(text: &str) -> Self {
+    pub fn new(text: &str) -> Self {
         let mut lines: Vec<String> = text.split('\n').map(|s| s.to_string()).collect();
         if lines.is_empty() {
             lines.push(String::new());
@@ -35,22 +35,22 @@ impl Buffer {
         Self { lines }
     }
 
-    fn to_text(&self) -> String {
+    pub fn to_text(&self) -> String {
         self.lines.join("\n")
     }
-    fn line_count(&self) -> usize {
+    pub fn line_count(&self) -> usize {
         self.lines.len()
     }
 
-    fn line(&self, row: usize) -> &str {
+    pub fn line(&self, row: usize) -> &str {
         &self.lines[row.min(self.lines.len().saturating_sub(1))]
     }
 
-    fn char_count(&self, row: usize) -> usize {
+    pub fn char_count(&self, row: usize) -> usize {
         self.line(row).chars().count()
     }
 
-    fn clamp_col(&self, row: usize, col: usize, insert: bool) -> usize {
+    pub fn clamp_col(&self, row: usize, col: usize, insert: bool) -> usize {
         let len = self.char_count(row);
         if insert {
             col.min(len)
@@ -61,7 +61,7 @@ impl Buffer {
         }
     }
 
-    fn byte_offset(&self, row: usize, col: usize) -> usize {
+    pub fn byte_offset(&self, row: usize, col: usize) -> usize {
         self.line(row)
             .char_indices()
             .nth(col)
@@ -69,7 +69,7 @@ impl Buffer {
             .unwrap_or(self.line(row).len())
     }
 
-    fn insert_char(&mut self, row: usize, col: usize, ch: char) {
+    pub fn insert_char(&mut self, row: usize, col: usize, ch: char) {
         while row >= self.lines.len() {
             self.lines.push(String::new());
         }
@@ -77,7 +77,7 @@ impl Buffer {
         self.lines[row].insert(byte, ch);
     }
 
-    fn insert_text(&mut self, row: usize, col: usize, text: &str) -> (usize, usize) {
+    pub fn insert_text(&mut self, row: usize, col: usize, text: &str) -> (usize, usize) {
         if text.is_empty() {
             return (row, col);
         }
@@ -106,7 +106,7 @@ impl Buffer {
         }
     }
 
-    fn delete_char(&mut self, row: usize, col: usize) -> Option<char> {
+    pub fn delete_char(&mut self, row: usize, col: usize) -> Option<char> {
         if col >= self.char_count(row) {
             return None;
         }
@@ -114,20 +114,20 @@ impl Buffer {
         Some(self.lines[row].remove(byte))
     }
 
-    fn split_line(&mut self, row: usize, col: usize) {
+    pub fn split_line(&mut self, row: usize, col: usize) {
         let byte = self.byte_offset(row, col);
         let rest = self.lines[row].split_off(byte);
         self.lines.insert(row + 1, rest);
     }
 
-    fn join_lines(&mut self, row: usize) {
+    pub fn join_lines(&mut self, row: usize) {
         if row + 1 < self.lines.len() {
             let next = self.lines.remove(row + 1);
             self.lines[row].push_str(&next);
         }
     }
 
-    fn delete_line(&mut self, row: usize) -> String {
+    pub fn delete_line(&mut self, row: usize) -> String {
         if self.lines.len() == 1 {
             let s = self.lines[0].clone();
             self.lines[0].clear();
@@ -137,11 +137,11 @@ impl Buffer {
         }
     }
 
-    fn insert_line(&mut self, row: usize, content: String) {
+    pub fn insert_line(&mut self, row: usize, content: String) {
         self.lines.insert(row, content);
     }
 
-    fn replace_range_on_line(&mut self, row: usize, col_start: usize, col_end: usize, s: &str) {
+    pub fn replace_range_on_line(&mut self, row: usize, col_start: usize, col_end: usize, s: &str) {
         let start = self.byte_offset(row, col_start);
         let end = self.byte_offset(row, col_end);
         let mut new = self.lines[row][..start].to_string();
@@ -150,7 +150,7 @@ impl Buffer {
         self.lines[row] = new;
     }
 
-    fn word_forward(&self, row: usize, col: usize) -> (usize, usize) {
+    pub fn word_forward(&self, row: usize, col: usize) -> (usize, usize) {
         let chars: Vec<char> = self.line(row).chars().collect();
         let mut c = col;
         while c < chars.len() && is_word(chars[c]) {
@@ -166,7 +166,7 @@ impl Buffer {
         }
     }
 
-    fn word_backward(&self, row: usize, col: usize) -> (usize, usize) {
+    pub fn word_backward(&self, row: usize, col: usize) -> (usize, usize) {
         let chars: Vec<char> = self.line(row).chars().collect();
         let mut c = col as isize - 1;
         while c >= 0 && chars[c as usize].is_whitespace() {
@@ -186,7 +186,7 @@ impl Buffer {
         }
     }
 
-    fn word_end(&self, row: usize, col: usize) -> (usize, usize) {
+    pub fn word_end(&self, row: usize, col: usize) -> (usize, usize) {
         let chars: Vec<char> = self.line(row).chars().collect();
         let mut c = col + 1;
         while c < chars.len() && chars[c].is_whitespace() {
@@ -198,7 +198,13 @@ impl Buffer {
         (row, c.min(chars.len().saturating_sub(1)))
     }
 
-    fn find_forward(&self, row: usize, col: usize, target: char, before: bool) -> Option<usize> {
+    pub fn find_forward(
+        &self,
+        row: usize,
+        col: usize,
+        target: char,
+        before: bool,
+    ) -> Option<usize> {
         let chars: Vec<char> = self.line(row).chars().collect();
         for i in (col + 1)..chars.len() {
             if chars[i] == target {
@@ -208,7 +214,13 @@ impl Buffer {
         None
     }
 
-    fn find_backward(&self, row: usize, col: usize, target: char, before: bool) -> Option<usize> {
+    pub fn find_backward(
+        &self,
+        row: usize,
+        col: usize,
+        target: char,
+        before: bool,
+    ) -> Option<usize> {
         if col == 0 {
             return None;
         }
@@ -225,14 +237,14 @@ impl Buffer {
         None
     }
 
-    fn first_non_blank(&self, row: usize) -> usize {
+    pub fn first_non_blank(&self, row: usize) -> usize {
         self.line(row)
             .chars()
             .take_while(|c| c.is_whitespace())
             .count()
     }
 
-    fn search_forward(
+    pub fn search_forward(
         &self,
         pat: &str,
         start_row: usize,
@@ -257,7 +269,7 @@ impl Buffer {
         None
     }
 
-    fn search_backward(
+    pub fn search_backward(
         &self,
         pat: &str,
         start_row: usize,
@@ -295,17 +307,20 @@ fn is_word(c: char) -> bool {
 // Mode
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq)]
-enum Mode {
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum Mode {
+    #[default]
     Normal,
     Insert,
     Visual,
     Command,
-    Search { forward: bool },
+    Search {
+        forward: bool,
+    },
 }
 
 impl Mode {
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
@@ -315,7 +330,7 @@ impl Mode {
             Mode::Search { forward: false } => "SEARCH↑",
         }
     }
-    fn color(&self) -> Color {
+    pub fn color(&self) -> Color {
         match self {
             Mode::Normal => crate::theme::BLUE,
             Mode::Insert => crate::theme::GREEN,
@@ -330,41 +345,50 @@ impl Mode {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct HistoryEntry {
-    buffer: Buffer,
-    row: usize,
-    col: usize,
+pub struct HistoryEntry {
+    pub buffer: Buffer,
+    pub row: usize,
+    pub col: usize,
 }
 
 #[derive(Clone)]
-struct EditorState {
-    buf: Buffer,
-    row: usize,
-    col: usize,
-    col_want: usize,
-    scroll: usize,
-    mode: Mode,
-    cmd_buf: String,
-    count_buf: String,
-    operator: Option<char>,
-    pending: Option<char>,
-    last_find: Option<(char, bool)>,
-    registers: HashMap<char, String>,
-    visual_start: (usize, usize),
-    undo_stack: VecDeque<HistoryEntry>,
-    redo_stack: VecDeque<HistoryEntry>,
+pub struct EditorState {
+    pub buf: Buffer,
+    pub row: usize,
+    pub col: usize,
+    pub col_want: usize,
+    pub scroll: usize,
+    pub mode: Mode,
+    pub cmd_buf: String,
+    pub count_buf: String,
+    pub operator: Option<char>,
+    pub pending: Option<char>,
+    pub last_find: Option<(char, bool)>,
+    pub registers: HashMap<char, String>,
+    pub visual_start: (usize, usize),
+    pub undo_stack: VecDeque<HistoryEntry>,
+    pub redo_stack: VecDeque<HistoryEntry>,
     pub filename: String,
     pub modified: bool,
     pub message: String,
-    last_search: String,
-    search_forward: bool,
-    request_view: bool,
+    pub last_search: String,
+    pub search_forward: bool,
+    pub request_view: bool,
     pub view_height: usize,
     pub view_width: usize,
 }
 
 impl EditorState {
-    fn new(filename: String, content: &str) -> Self {
+    pub fn absolute_byte_offset_at(&self, row: usize, col: usize) -> usize {
+        let mut offset = 0;
+        for i in 0..row {
+            offset += self.buf.line(i).len() + 1; // +1 for \n
+        }
+        offset += self.buf.byte_offset(row, col);
+        offset
+    }
+
+    pub fn new(filename: String, content: &str) -> Self {
         Self {
             buf: Buffer::new(content),
             row: 0,
@@ -450,6 +474,15 @@ impl EditorState {
         self.col = self
             .buf
             .clamp_col(self.row, self.col, self.mode == Mode::Insert);
+    }
+
+    pub fn absolute_byte_offset(&self) -> usize {
+        let mut offset = 0;
+        for i in 0..self.row {
+            offset += self.buf.line(i).len() + 1; // +1 for \n
+        }
+        offset += self.buf.byte_offset(self.row, self.col);
+        offset
     }
 
     fn scroll_to_cursor(&mut self) {
@@ -835,7 +868,7 @@ enum RenderedLine {
 // Key handling (pure, no iocraft)
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn handle_key(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
+pub fn handle_key(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
     s.message.clear();
     match s.mode.clone() {
         Mode::Insert => handle_insert(s, code, ctrl),
@@ -1507,269 +1540,4 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
     }
     s.clamp();
     false
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// iocraft component — uses element!/Text/View for rendering
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[derive(Default, Props)]
-pub struct NvimEditorProps {
-    pub filename: String,
-    pub initial_content: String,
-    pub viewport_width: u16,
-    pub viewport_height: u16,
-    pub on_change: Handler<String>,
-    pub cursor_ref: Option<Ref<usize>>,
-    pub on_view: Handler<()>,
-}
-
-#[component]
-pub fn NvimEditor(mut hooks: Hooks, props: &mut NvimEditorProps) -> impl Into<AnyElement<'static>> {
-    // use_ref: holds EditorState directly — mutations don't trigger re-renders.
-    let mut state_ref = hooks.use_ref(|| {
-        Some(EditorState::new(
-            props.filename.clone(),
-            &props.initial_content,
-        ))
-    });
-
-    // use_state: a simple counter — the ONLY thing that drives re-renders.
-    let tick: State<u64> = hooks.use_state(|| 0u64);
-    let should_quit: State<bool> = hooks.use_state(|| false);
-
-    hooks.use_effect(
-        {
-            let mut state_ref = state_ref.clone();
-            let filename = props.filename.clone();
-            let initial_content = props.initial_content.clone();
-            let mut tick = tick.clone();
-            move || {
-                if let Some(s) = state_ref.write().as_mut() {
-                    *s = EditorState::new(filename, &initial_content);
-                }
-                tick.set(tick.get().wrapping_add(1));
-            }
-        },
-        props.filename.clone(),
-    );
-
-    let on_change = props.on_change.clone();
-    let cursor_ref = props.cursor_ref;
-    let on_view = props.on_view.clone();
-    hooks.use_terminal_events({
-        let mut state_ref = state_ref.clone();
-        let mut tick = tick;
-        let mut should_quit = should_quit;
-        move |ev| {
-            if let TerminalEvent::Resize(w, h) = &ev {
-                if let Some(s) = state_ref.write().as_mut() {
-                    s.view_width = *w as usize;
-                    s.view_height = (*h as usize).saturating_sub(3);
-                }
-                tick.set(tick.get().wrapping_add(1));
-                return;
-            }
-
-            let TerminalEvent::Key(KeyEvent {
-                code,
-                modifiers,
-                kind,
-                ..
-            }) = ev
-            else {
-                return;
-            };
-
-            if kind != KeyEventKind::Press {
-                return;
-            }
-
-            let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-            let (quit, new_content, cursor_row, request_view) =
-                if let Some(s) = state_ref.write().as_mut() {
-                    let before_content = s.buf.to_text();
-                    let q = handle_key(s, code, ctrl);
-                    let after_content = s.buf.to_text();
-                    let changed = before_content != after_content;
-                    let request_view = s.request_view;
-                    s.request_view = false;
-                    (
-                        q,
-                        changed.then_some(after_content),
-                        Some(s.row),
-                        request_view,
-                    )
-                } else {
-                    (false, None, None, false)
-                };
-
-            if let Some(content) = new_content {
-                on_change(content);
-            }
-            if let (Some(mut cursor_ref), Some(row)) = (cursor_ref, cursor_row) {
-                cursor_ref.set(row);
-            }
-            if request_view {
-                on_view(());
-            }
-            if quit {
-                should_quit.set(true);
-            } else {
-                tick.set(tick.get().wrapping_add(1));
-            }
-        }
-    });
-
-    let mut system = hooks.use_context_mut::<SystemContext>();
-    if *should_quit.read() {
-        system.exit();
-    }
-
-    // ── Snapshot state for rendering (read-only borrow of the ref) ────────
-    {
-        if let Some(s) = state_ref.write().as_mut() {
-            s.view_width = props.viewport_width as usize;
-            s.view_height = (props.viewport_height as usize).saturating_sub(3);
-            s.scroll_to_cursor();
-        }
-    }
-    let guard = state_ref.read();
-    let s = guard.as_ref().unwrap();
-
-    let view_h = s.view_height;
-    let view_w = s.view_width;
-    let lines = s.render_lines(view_h, view_w);
-    let mode = s.mode.clone();
-    let row = s.row;
-    let col = s.col;
-    let total = s.buf.line_count();
-    let filename = s.filename.clone();
-    let modified = s.modified;
-    let message = s.message.clone();
-    let cmd_buf = s.cmd_buf.clone();
-    let count_buf = s.count_buf.clone();
-    let operator = s.operator;
-    drop(guard);
-
-    // ── Status line strings ───────────────────────────────────────────────
-    // ── Status line strings ───────────────────────────────────────────────
-    let mode_str = format!(" {} ", mode.label());
-    let pos_str = format!(" {}:{} ", row + 1, col + 1);
-    let fname_str = format!("  {}{}  ", filename, if modified { " [+]" } else { "" });
-
-    // ── Cmdline/message ───────────────────────────────────────────────────
-    let cmdline_text = match mode {
-        Mode::Command => format!(":{}", cmd_buf),
-        Mode::Search { forward } => format!("{}{}", if forward { '/' } else { '?' }, cmd_buf),
-        _ => message.clone(),
-    };
-    let count_hint = if !count_buf.is_empty() || operator.is_some() {
-        format!(
-            "{}{}",
-            count_buf,
-            operator.map(|c| c.to_string()).unwrap_or_default()
-        )
-    } else {
-        String::new()
-    };
-
-    element! {
-        View(
-            width: 100pct,
-            height: 100pct,
-            flex_direction: FlexDirection::Column,
-        ) {
-            // ── Editor area ──────────────────────────────────────────────
-            View(flex_grow: 1.0, flex_direction: FlexDirection::Row, overflow: Overflow::Hidden) {
-                // Gutter
-                View(width: 5, flex_direction: FlexDirection::Column, background_color: crate::theme::DARK_BG) {
-                    #(lines.iter().map(|line| match line {
-                        RenderedLine::Tilde => element! {
-                            View(width: 100pct, justify_content: JustifyContent::FlexEnd, padding_right: 1) {
-                                Text(content: "~", color: crate::theme::COMMENT)
-                            }
-                        },
-                        RenderedLine::Text { line_num, is_current, .. } => element! {
-                            View(width: 100pct, justify_content: JustifyContent::FlexEnd, padding_right: 1) {
-                                Text(
-                                    content: format!("{}", line_num + 1),
-                                    color: if *is_current { crate::theme::YELLOW } else { crate::theme::COMMENT },
-                                    weight: if *is_current { Weight::Bold } else { Weight::Normal },
-                                )
-                            }
-                        },
-                    }))
-                }
-
-                // Text area — one Text per styled run, not one per character.
-                View(flex_grow: 1.0, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
-                    #(lines.iter().map(|line| match line {
-                        RenderedLine::Tilde => element! {
-                            View(background_color: crate::theme::BG) {
-                                Text(content: "~", color: crate::theme::COMMENT)
-                            }
-                        },
-                        RenderedLine::Text { runs, bg, .. } => element! {
-                            View(flex_direction: FlexDirection::Row, background_color: *bg) {
-                                #(runs.iter().map(|run| element! {
-                                    View(background_color: run.bg) {
-                                        Text(
-                                            content: run.text.clone(),
-                                            color: run.fg,
-                                            weight: if run.bold { Weight::Bold } else { Weight::Normal },
-                                        )
-                                    }
-                                }))
-                            }
-                        },
-                    }))
-                }
-            }
-
-            // ── Status bar ───────────────────────────────────────────────
-            View(
-                width: 100pct,
-                flex_direction: FlexDirection::Row,
-                background_color: crate::theme::BORDER,
-            ) {
-                View(background_color: mode.color(), padding_left: 1, padding_right: 1) {
-                    Text(content: mode_str, color: crate::theme::DARK_BG, weight: Weight::Bold)
-                }
-                View(flex_grow: 1.0, padding_left: 1) {
-                    Text(content: fname_str, color: crate::theme::FG)
-                }
-                View(padding_left: 1, padding_right: 1) {
-                    Text(content: format!("{}:{} / {}", row + 1, col + 1, total), color: crate::theme::FG)
-                }
-                View(padding_right: 1) {
-                    Text(content: pos_str, color: crate::theme::FG)
-                }
-            }
-
-            // ── Cmdline / message ────────────────────────────────────────
-            View(width: 100pct, flex_direction: FlexDirection::Row) {
-                View(flex_grow: 1.0) {
-                    Text(content: cmdline_text, color: crate::theme::FG)
-                }
-                #(if !count_hint.is_empty() {
-                    Some(element! {
-                        View(padding_right: 1) {
-                            Text(content: count_hint.clone(), color: crate::theme::YELLOW)
-                        }
-                    })
-                } else {
-                    None
-                }.into_iter())
-            }
-
-            // ── Help line ────────────────────────────────────────────────
-            View(width: 100pct, background_color: crate::theme::DARK_BG) {
-                Text(
-                    content: " i/a=Insert  v=Visual  :w=Save  :q=Quit  u=Undo  C-r=Redo  /=Search  C-p=Find  ZZ=SaveQuit",
-                    color: crate::theme::COMMENT,
-                )
-            }
-        }
-    }
 }

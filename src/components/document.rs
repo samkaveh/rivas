@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use iocraft::prelude::*;
 
 use crate::components::blocks_renderer::BlocksRenderer;
+use crate::components::editor::{Buffer, EditorState, Mode, handle_key};
 use crate::document::cache::ParseCache;
 use crate::document::parser::parse_markdown;
 
@@ -14,34 +15,91 @@ pub struct DocumentProps {
     pub viewport_width: Option<u32>,
     pub keyboard_navigation: Option<bool>,
     pub follow_ref: Option<Ref<usize>>,
+    pub cursor_offset: Option<Ref<usize>>,
     pub scale: Option<f32>,
+    pub on_change: Handler<String>,
+    pub on_quit: Handler<()>,
 }
 
 #[component]
 pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
-    let content = props.content.clone();
+    let content_prop = props.content.clone();
+
+    let editor_state = hooks.use_ref(|| {
+        Some(EditorState::new(
+            props.file_path.to_string_lossy().to_string(),
+            &content_prop,
+        ))
+    });
+
+    // Use the editor_state for rendering status and passing to blocks_renderer
+    let state_guard = editor_state.read();
+    let current_mode = state_guard
+        .as_ref()
+        .map(|s| s.mode.clone())
+        .unwrap_or(Mode::Normal);
+    let current_msg = state_guard
+        .as_ref()
+        .map(|s| s.message.clone())
+        .unwrap_or_default();
+    let current_cmd = state_guard
+        .as_ref()
+        .map(|s| s.cmd_buf.clone())
+        .unwrap_or_default();
+    drop(state_guard);
+
+    // To trigger re-renders on edit
+    let tick = hooks.use_state(|| 0u64);
+
+    // Keep editor state in sync with content prop if it changes externally
+    hooks.use_effect(
+        {
+            let mut editor_state = editor_state.clone();
+            let content = content_prop.clone();
+            move || {
+                if let Some(s) = editor_state.write().as_mut() {
+                    if s.buf.to_text() != content {
+                        s.buf = Buffer::new(&content);
+                    }
+                }
+            }
+        },
+        content_prop.clone(),
+    );
 
     // Use parse cache to memoize markdown parsing
     let cache = hooks.use_ref(|| ParseCache::new());
-    let doc = if let Some(cached_doc) = cache.read().get(&content) {
+    let current_content = editor_state
+        .read()
+        .as_ref()
+        .map(|s| s.buf.to_text())
+        .unwrap_or_default();
+    let doc = if let Some(cached_doc) = cache.read().get(&current_content) {
         cached_doc
     } else {
-        let parsed = parse_markdown(&content);
-        cache.read().insert(&content, parsed.clone());
+        let parsed = parse_markdown(&current_content);
+        cache.read().insert(&current_content, parsed.clone());
         parsed
     };
 
     let vh = props.viewport_height;
     let vw = props.viewport_width;
     let scale = props.scale;
-    let keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
+    let _keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
     let scroll_handle = hooks.use_ref_default::<ScrollViewHandle>();
     let mut pending_g = hooks.use_state(|| false);
-    let follow_ref = props.follow_ref;
+    let _follow_ref = props.follow_ref;
+    let on_change = props.on_change.clone();
+    let on_quit = props.on_quit.clone();
 
     hooks.use_terminal_events({
         let mut scroll_handle = scroll_handle;
-        let content = content.clone();
+        let content = current_content.clone();
+        let cursor_offset = props.cursor_offset.clone();
+        let mut editor_state = editor_state.clone();
+        let mut tick = tick.clone();
+        let on_change = on_change.clone();
+        let on_quit = on_quit.clone();
         move |event| {
             let TerminalEvent::Key(KeyEvent {
                 code,
@@ -53,33 +111,90 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 return;
             };
 
-            if !keyboard_navigation || kind == KeyEventKind::Release {
-                if let Some(follow_ref) = follow_ref {
-                    let current_line = follow_ref.get();
-                    let total_lines = content.lines().count().max(1);
-                    let viewport_height = vh.unwrap_or(0) as i32;
-                    let ch = scroll_handle.read().content_height() as i32;
-
-                    if current_line + 1 >= total_lines {
-                        scroll_handle.write().scroll_to_bottom();
-                    } else if current_line == 0 {
-                        scroll_handle.write().scroll_to_top();
-                    } else if ch > 0 {
-                        let proportion = current_line as f32 / total_lines as f32;
-                        let offset = (proportion * ch as f32) as i32 - (viewport_height / 3).max(0);
-                        scroll_handle.write().scroll_to(offset.max(0));
-                    } else {
-                        let offset = current_line as i32 - (viewport_height / 3).max(0);
-                        scroll_handle.write().scroll_to(offset.max(0));
-                    }
-                }
+            if kind == KeyEventKind::Release {
                 return;
             }
 
             let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+
+            // Handle editing
+            let mut quit = false;
+            let mut changed = false;
+            let mut cursor_row = None;
+            if let Some(s) = editor_state.write().as_mut() {
+                let before = s.buf.to_text();
+                if handle_key(s, code, ctrl) {
+                    quit = true;
+                }
+                let after = s.buf.to_text();
+                if before != after {
+                    changed = true;
+                    on_change(after);
+                }
+
+                // Update global cursor offset
+                if let Some(mut off_ref) = cursor_offset.clone() {
+                    off_ref.set(s.absolute_byte_offset());
+                }
+                cursor_row = Some(s.row);
+            }
+
+            if quit {
+                on_quit(());
+                return;
+            }
+
+            if changed {
+                tick.set(tick.get().wrapping_add(1));
+            }
+
+            // Scroll and Navigation logic
             let viewport_height = scroll_handle.read().viewport_height() as i32;
             let page = viewport_height.max(1);
             let half_page = (page / 2).max(1);
+
+            let mut update_scroll = |current_row: usize| {
+                let state_guard = editor_state.read();
+                let total_logical_lines = state_guard
+                    .as_ref()
+                    .map(|s| s.buf.line_count())
+                    .unwrap_or(1);
+                drop(state_guard);
+
+                let vh = vh.unwrap_or(0) as i32;
+                let ch = scroll_handle.read().content_height() as i32;
+
+                if ch <= vh {
+                    return;
+                }
+
+                // 1. Explicit Boundary Handling
+                if current_row == 0 {
+                    scroll_handle.write().scroll_to(0);
+                    return;
+                }
+                if current_row >= total_logical_lines - 1 {
+                    scroll_handle.write().scroll_to(ch - vh);
+                    return;
+                }
+
+                // 2. Proportional Centering
+                // Use total_logical_lines - 1 to ensure the last line maps to 1.0
+                let proportion = current_row as f32 / (total_logical_lines.max(2) - 1) as f32;
+                let visual_offset = (proportion * ch as f32) as i32;
+
+                // Center the cursor in the viewport
+                let target_scroll = visual_offset - (vh / 2);
+
+                // Clamp to valid range [0, content_height - viewport_height]
+                scroll_handle
+                    .write()
+                    .scroll_to(target_scroll.max(0).min(ch - vh));
+            };
+
+            if let Some(row) = cursor_row {
+                update_scroll(row);
+            }
 
             match code {
                 KeyCode::Char('g') if !ctrl && pending_g.get() => {
@@ -97,22 +212,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     scroll_handle.write().scroll_to_bottom();
                     pending_g.set(false);
                 }
-                KeyCode::Char('j') if !ctrl => {
-                    scroll_handle.write().scroll_by(1);
-                    pending_g.set(false);
-                }
-                KeyCode::Down => {
-                    scroll_handle.write().scroll_by(1);
-                    pending_g.set(false);
-                }
-                KeyCode::Char('k') if !ctrl => {
-                    scroll_handle.write().scroll_by(-1);
-                    pending_g.set(false);
-                }
-                KeyCode::Up => {
-                    scroll_handle.write().scroll_by(-1);
-                    pending_g.set(false);
-                }
                 KeyCode::Char('d') if ctrl => {
                     scroll_handle.write().scroll_by(half_page);
                     pending_g.set(false);
@@ -125,7 +224,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     scroll_handle.write().scroll_by(page);
                     pending_g.set(false);
                 }
-                KeyCode::PageDown | KeyCode::Char(' ') => {
+                KeyCode::PageDown => {
                     scroll_handle.write().scroll_by(page);
                     pending_g.set(false);
                 }
@@ -162,12 +261,35 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_top: 1, padding_bottom: 1) {
                         BlocksRenderer(
                             blocks: doc.blocks,
+                            content: current_content,
                             file_path: file_path,
                             viewport_height: vh,
                             viewport_width: vw,
-                            scale
+                            cursor_offset: props.cursor_offset.clone(),
+                            scale,
+                            editor_state: Some(editor_state.clone()),
                         )
                     }
+                }
+            }
+            View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
+                View(background_color: current_mode.color(), padding_left: 1, padding_right: 1) {
+                    Text(content: format!(" {} ", current_mode.label()), color: crate::theme::DARK_BG, weight: Weight::Bold)
+                }
+                View(flex_grow: 1.0, padding_left: 1) {
+                    #(if current_mode == Mode::Command {
+                        Some(element! {
+                            Text(content: format!(":{}", current_cmd), color: crate::theme::FG)
+                        })
+                    } else if let Mode::Search { .. } = current_mode {
+                        Some(element! {
+                            Text(content: current_cmd.clone(), color: crate::theme::FG)
+                        })
+                    } else {
+                        Some(element! {
+                            Text(content: current_msg.clone(), color: crate::theme::FG)
+                        })
+                    }.into_iter())
                 }
             }
         }

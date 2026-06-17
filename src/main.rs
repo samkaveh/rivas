@@ -13,7 +13,6 @@ mod output;
 mod theme;
 
 use crate::components::document::Document;
-use crate::components::editor::NvimEditor;
 use crate::lib_file_cache::FileListCache;
 use skim::prelude::{Skim, SkimItemReader, SkimOptionsBuilder};
 use std::sync::{Arc, Mutex};
@@ -22,9 +21,7 @@ use std::sync::{Arc, Mutex};
 enum AppAction {
     #[default]
     Quit,
-    SearchFile {
-        edit_mode: bool,
-    },
+    SearchFile,
 }
 
 #[derive(Parser)]
@@ -86,7 +83,7 @@ fn main() -> Result<()> {
     }
 
     let action = Arc::new(Mutex::new(AppAction::Quit));
-    let mut edit_mode = cli.edit;
+    let _edit_mode = cli.edit;
 
     loop {
         *action.lock().unwrap() = AppAction::Quit;
@@ -95,7 +92,6 @@ fn main() -> Result<()> {
             element!(App(
                 file_path: file_path.clone(),
                 content: content.as_str(),
-                edit: edit_mode,
                 action: action.clone(),
             ))
             .fullscreen(),
@@ -104,10 +100,7 @@ fn main() -> Result<()> {
         let next_action = action.lock().unwrap().clone();
         match next_action {
             AppAction::Quit => break,
-            AppAction::SearchFile {
-                edit_mode: final_edit_mode,
-            } => {
-                edit_mode = final_edit_mode;
+            AppAction::SearchFile => {
                 if let Some(selected) = run_fuzzy_finder() {
                     // Auto-save current file if it exists and content is modified
                     if let Some(ref path) = file_path {
@@ -133,7 +126,6 @@ fn main() -> Result<()> {
 struct AppProps<'a> {
     file_path: Option<PathBuf>,
     content: &'a str,
-    edit: bool,
     action: Arc<Mutex<AppAction>>,
 }
 
@@ -143,21 +135,19 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let mut system = hooks.use_context_mut::<SystemContext>();
     let should_exit = hooks.use_state(|| false);
     let path = props.file_path.clone().unwrap_or_default();
-    let path_name = path
+    let _path_name = path
         .to_str()
         .filter(|name| !name.is_empty())
         .unwrap_or("untitled.md")
         .to_string();
     let content = hooks.use_state(|| props.content.to_string());
     let mouse_captured = hooks.use_state(|| false);
-    let edit_mode = hooks.use_state(|| props.edit);
     let mermaid_scale = hooks.use_state(|| 1.0f32);
-    let editor_line = hooks.use_ref(|| 0usize);
+    let cursor_offset = hooks.use_ref(|| 0usize);
 
     hooks.use_terminal_events({
         let mut mermaid_scale = mermaid_scale.clone();
         let mut should_exit = should_exit.clone();
-        let mut edit_mode = edit_mode.clone();
         let mut mouse_captured = mouse_captured.clone();
         let action = props.action.clone();
         move |event| match event {
@@ -169,17 +159,13 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             }) if kind != KeyEventKind::Release => {
                 let ctrl = modifiers.contains(KeyModifiers::CONTROL);
                 if ctrl && code == KeyCode::Char('p') {
-                    *action.lock().unwrap() = AppAction::SearchFile {
-                        edit_mode: edit_mode.get(),
-                    };
+                    *action.lock().unwrap() = AppAction::SearchFile;
                     should_exit.set(true);
                     return;
                 }
                 match code {
-                    KeyCode::Char('q') | KeyCode::Esc if !edit_mode.get() => should_exit.set(true),
-                    KeyCode::Char('e') if !edit_mode.get() => edit_mode.set(true),
                     KeyCode::Char('m') => mouse_captured.set(true),
-                    KeyCode::Char('+') | KeyCode::Char('=') if !edit_mode.get() => {
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
                         let max_scale = 3.0f32; // upper cap
                         let current = mermaid_scale.get();
                         let next = (current + 0.1).min(max_scale);
@@ -187,7 +173,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                             mermaid_scale.set(next);
                         }
                     }
-                    KeyCode::Char('-') if !edit_mode.get() => {
+                    KeyCode::Char('-') => {
                         let min_scale = 0.1f32;
                         let current = mermaid_scale.get();
                         let next = (current - 0.1).max(min_scale);
@@ -204,7 +190,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
 
     hooks.use_effect(
         {
-            let _edit_mode = edit_mode.get();
+            let _mermaid_scale = mermaid_scale.get();
             move || {
                 if !kitty::is_supported() {
                     return;
@@ -214,7 +200,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 let _ = stdout.flush();
             }
         },
-        edit_mode.get(),
+        mermaid_scale.get().to_bits(),
     );
 
     if should_exit.get() {
@@ -234,86 +220,57 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             content.set(next_content);
         }
     });
-    let on_view = hooks.use_async_handler(move |()| {
-        let mut edit_mode = edit_mode.clone();
+    let on_quit = hooks.use_async_handler(move |()| {
+        let mut should_exit = should_exit.clone();
         async move {
-            edit_mode.set(false);
+            should_exit.set(true);
         }
     });
 
-    if edit_mode.get() {
-        let editor_width = (width / 2).max(1);
-        let preview_width = width.saturating_sub(editor_width).max(1);
-
-        element! {
-            View(flex_direction: FlexDirection::Row, width, height) {
-                View(width: editor_width, height, overflow: Overflow::Hidden) {
-                    NvimEditor(
-                        filename: path_name,
-                        initial_content: current_content.clone(),
-                        viewport_width: editor_width,
-                        viewport_height: height,
-                        on_change,
-                        cursor_ref: Some(editor_line),
-                        on_view
-                    )
+    element! {
+        View(flex_direction: FlexDirection::Column, width, height) {
+            Document(
+                content: current_content,
+                file_path: path,
+                viewport_height: height.saturating_sub(1) as u32,
+                viewport_width: width as u32,
+                keyboard_navigation: Some(true),
+                follow_ref: None,
+                cursor_offset: Some(cursor_offset),
+                scale: Some(mermaid_scale.get()),
+                on_change,
+                on_quit,
+            )
+            View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
+                View(background_color: crate::theme::DARK_GREY) {
+                    Text(content: " :q ", color: crate::theme::FG)
                 }
-                View(width: 1, height, background_color: crate::theme::BORDER) {}
-                View(width: preview_width.saturating_sub(1), height, flex_direction: FlexDirection::Column, overflow: Overflow::Hidden) {
-                    Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(3) as u32, viewport_width: preview_width.saturating_sub(1) as u32, keyboard_navigation: Some(false), follow_ref: Some(editor_line), scale: Some(mermaid_scale.get()))
-                    View(width: 100pct, background_color: crate::theme::STATUS_BG) {
-                        Text(content: " PREVIEW ", color: crate::theme::FG, weight: Weight::Bold)
-                    }
-                    View(width: 100pct) {
-                        Text(content: " :view returns to rendered view ", color: crate::theme::COMMENT)
-                    }
-                    View(width: 100pct, background_color: crate::theme::DARK_BG, flex_direction: FlexDirection::Row) {
-                        Text(content: " live markdown preview ", color: crate::theme::COMMENT)
-                        View(flex_grow: 1.0) {}
-                        Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
-                    }
+                Text(content: " Quit ")
+                View(background_color: crate::theme::DARK_GREY) {
+                    Text(content: " C-p ", color: crate::theme::FG)
                 }
-            }
-        }
-    } else {
-        element! {
-            View(flex_direction: FlexDirection::Column,  width, height) {
-                Document(content: current_content, file_path: path, viewport_height: height.saturating_sub(1) as u32, viewport_width: width as u32, keyboard_navigation: Some(true), follow_ref: None, scale: Some(mermaid_scale.get()))
-                View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " q ", color: crate::theme::FG)
-                    }
-                    Text(content: " Quit ")
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " e ", color: crate::theme::FG)
-                    }
-                    Text(content: " Edit ")
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " C-p ", color: crate::theme::FG)
-                    }
-                    Text(content: " Find ")
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " j/k ", color: crate::theme::FG)
-                    }
-                    Text(content: " Scroll ")
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " gg/G ", color: crate::theme::FG)
-                    }
-                    Text(content: " Top/Bottom ")
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " + ", color: crate::theme::FG)
-                    }
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " - ", color: crate::theme::FG)
-                    }
-                    Text(content: " Zoom ")
-                    View(background_color: crate::theme::DARK_GREY) {
-                        Text(content: " m ", color: crate::theme::FG)
-                    }
-                    Text(content: " Mouse ")
-                    View(flex_grow: 1.0) {}
-                    Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
+                Text(content: " Find ")
+                View(background_color: crate::theme::DARK_GREY) {
+                    Text(content: " j/k ", color: crate::theme::FG)
                 }
+                Text(content: " Scroll ")
+                View(background_color: crate::theme::DARK_GREY) {
+                    Text(content: " gg/G ", color: crate::theme::FG)
+                }
+                Text(content: " Top/Bottom ")
+                View(background_color: crate::theme::DARK_GREY) {
+                    Text(content: " + ", color: crate::theme::FG)
+                }
+                View(background_color: crate::theme::DARK_GREY) {
+                    Text(content: " - ", color: crate::theme::FG)
+                }
+                Text(content: " Zoom ")
+                View(background_color: crate::theme::DARK_GREY) {
+                    Text(content: " m ", color: crate::theme::FG)
+                }
+                Text(content: " Mouse ")
+                View(flex_grow: 1.0) {}
+                Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
             }
         }
     }

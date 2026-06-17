@@ -5,42 +5,54 @@ pub enum Block {
         level: u8,
         content: Vec<Inline>,
         id: String,
+        span: (usize, usize),
     },
     Paragraph {
         content: Vec<Inline>,
+        span: (usize, usize),
     },
     Code {
         language: Option<String>,
         code: String,
+        span: (usize, usize),
     },
     Mermaid {
         source: String,
+        span: (usize, usize),
     },
     Math {
         content: String,
         display: bool,
+        span: (usize, usize),
     },
     Quote {
         children: Vec<Block>,
+        span: (usize, usize),
     },
     List {
         ordered: bool,
         start: Option<u64>,
         items: Vec<ListItem>,
+        span: (usize, usize),
     },
     Table {
         headers: Vec<TableCell>,
         alignments: Vec<Alignment>,
         rows: Vec<Vec<TableCell>>,
+        span: (usize, usize),
     },
-    ThematicBreak,
+    ThematicBreak {
+        span: (usize, usize),
+    },
     Image {
         alt: String,
         url: String,
         title: Option<String>,
+        span: (usize, usize),
     },
     Html {
         content: String,
+        span: (usize, usize),
     },
 }
 
@@ -63,7 +75,24 @@ pub enum Alignment {
     None,
 }
 
-/// Inline elements
+impl Block {
+    pub fn span(&self) -> (usize, usize) {
+        match self {
+            Block::Heading { span, .. } => *span,
+            Block::Paragraph { span, .. } => *span,
+            Block::Code { span, .. } => *span,
+            Block::Mermaid { span, .. } => *span,
+            Block::Math { span, .. } => *span,
+            Block::Quote { span, .. } => *span,
+            Block::List { span, .. } => *span,
+            Block::Table { span, .. } => *span,
+            Block::ThematicBreak { span } => *span,
+            Block::Image { span, .. } => *span,
+            Block::Html { span, .. } => *span,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Inline {
     Text(String),
