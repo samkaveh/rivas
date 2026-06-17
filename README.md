@@ -55,7 +55,7 @@ Note: Only works with nightly WezTerm on windows (since other versions do not ha
 
 ```bash
 # Download the binary
-curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.1.5/rivas-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.2.0/rivas-x86_64-unknown-linux-gnu.tar.gz
 
 # Extract and install
 tar -xzf rivas-x86_64-unknown-linux-gnu.tar.gz
@@ -70,41 +70,7 @@ rivas examples/all-rendering-cases.md
 
 ## Editing
 
-Rivas can switch between rendered preview and side-by-side Markdown editing
-without leaving the terminal UI.
-
-Rendered viewer mode:
-
-- `e`: enter side-by-side edit mode.
-- `j` / `Down`: scroll down.
-- `k` / `Up`: scroll up.
-- `Ctrl-D`: scroll down by half a page.
-- `Ctrl-U`: scroll up by half a page.
-- `Ctrl-F`, `Space`, or `PageDown`: scroll down by one page.
-- `Ctrl-B` or `PageUp`: scroll up by one page.
-- `gg` / `Home`: jump to the top.
-- `G` / `End`: jump to the bottom.
-- `q` / `Esc`: quit.
-
-Side-by-side edit mode:
-
-- The source editor is on the left and the rendered preview is on the right.
-- The preview is rebuilt as edits happen, including images, math, and Mermaid diagrams.
-- The preview scrolls with the current source cursor line.
-- `:view`, `:render`, or `:preview`: return to rendered viewer mode.
-- `Esc`: leave insert, command, visual, or search mode inside the editor.
-- `:q`: quit the editor if there are no unsaved changes.
-- `:q!`: quit without saving.
-- `:w`: save changes.
-- `:wq` or `ZZ`: save and quit.
-
-Editor normal mode supports Vim-style movement and editing, including `h/j/k/l`,
-`w/b/e`, `0`, `^`, `$`, `gg`, `G`, `{`, `}`, `i`, `a`, `o`, `O`, `v`, `d`, `c`,
-`y`, `p`, `P`, `u`, `Ctrl-R`, `/`, `?`, `n`, and `N`.
-
-Saving writes to the opened file path. Markdown read from stdin can still be
-edited during the session, but there is no durable destination unless you use a
-file path.
+Rivas supports edit in place with neovim style editting and key shortcuts.
 
 ## Supported Markdown Notes
 
