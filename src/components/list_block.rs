@@ -11,7 +11,6 @@ pub struct ListBlockProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
-    pub scale: Option<f32>,
 }
 
 #[component]
@@ -42,7 +41,6 @@ pub fn ListBlock(props: &ListBlockProps, _hooks: Hooks) -> impl Into<AnyElement<
                                 file_path: props.file_path.clone(),
                                 viewport_height: props.viewport_height,
                                 viewport_width: props.viewport_width,
-                                scale: props.scale
                             )
                         }
                     }

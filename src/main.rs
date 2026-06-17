@@ -142,13 +142,10 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         .to_string();
     let content = hooks.use_state(|| props.content.to_string());
     let mouse_captured = hooks.use_state(|| false);
-    let mermaid_scale = hooks.use_state(|| 1.0f32);
     let cursor_offset = hooks.use_ref(|| 0usize);
 
     hooks.use_terminal_events({
-        let mut mermaid_scale = mermaid_scale.clone();
-        let mut should_exit = should_exit.clone();
-        let mut mouse_captured = mouse_captured.clone();
+        let mut should_exit = should_exit;
         let action = props.action.clone();
         move |event| match event {
             TerminalEvent::Key(KeyEvent {
@@ -161,47 +158,11 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 if ctrl && code == KeyCode::Char('p') {
                     *action.lock().unwrap() = AppAction::SearchFile;
                     should_exit.set(true);
-                    return;
-                }
-                match code {
-                    KeyCode::Char('m') => mouse_captured.set(true),
-                    KeyCode::Char('+') | KeyCode::Char('=') => {
-                        let max_scale = 3.0f32; // upper cap
-                        let current = mermaid_scale.get();
-                        let next = (current + 0.1).min(max_scale);
-                        if (next - current).abs() > f32::EPSILON {
-                            mermaid_scale.set(next);
-                        }
-                    }
-                    KeyCode::Char('-') => {
-                        let min_scale = 0.1f32;
-                        let current = mermaid_scale.get();
-                        let next = (current - 0.1).max(min_scale);
-                        if (next - current).abs() > f32::EPSILON {
-                            mermaid_scale.set(next);
-                        }
-                    }
-                    _ => {}
                 }
             }
             _ => {}
         }
     });
-
-    hooks.use_effect(
-        {
-            let _mermaid_scale = mermaid_scale.get();
-            move || {
-                if !kitty::is_supported() {
-                    return;
-                }
-                let mut stdout = std::io::stdout().lock();
-                kitty::delete_all(&mut stdout);
-                let _ = stdout.flush();
-            }
-        },
-        mermaid_scale.get().to_bits(),
-    );
 
     if should_exit.get() {
         if kitty::is_supported() {
@@ -237,7 +198,6 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 keyboard_navigation: Some(true),
                 follow_ref: None,
                 cursor_offset: Some(cursor_offset),
-                scale: Some(mermaid_scale.get()),
                 on_change,
                 on_quit,
             )
@@ -258,19 +218,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     Text(content: " gg/G ", color: crate::theme::FG)
                 }
                 Text(content: " Top/Bottom ")
-                View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " + ", color: crate::theme::FG)
-                }
-                View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " - ", color: crate::theme::FG)
-                }
-                Text(content: " Zoom ")
-                View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " m ", color: crate::theme::FG)
-                }
-                Text(content: " Mouse ")
                 View(flex_grow: 1.0) {}
-                Text(content: format!(" Zoom: {:.1}x ", mermaid_scale.get()), color: crate::theme::COMMENT)
             }
         }
     }

@@ -55,7 +55,8 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     }
 
     if data_cache.read().is_empty() {
-        let loaded_image = match render_math(props.content.as_str(), props.display, vw, true) {
+        let loaded_image = match render_math(props.content.as_str(), props.display, 100 * vw, true)
+        {
             Ok(v) => v,
             Err(e) => {
                 return element! {

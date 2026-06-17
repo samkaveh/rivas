@@ -9,7 +9,6 @@ pub struct QuoteBlockProps {
     pub file_path: Option<PathBuf>,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
-    pub scale: Option<f32>,
 }
 
 #[component]
@@ -25,7 +24,6 @@ pub fn QuoteBlock(props: &QuoteBlockProps, _hooks: Hooks) -> impl Into<AnyElemen
                 file_path: file_path,
                 viewport_height: props.viewport_height,
                 viewport_width: props.viewport_width,
-                scale: props.scale
             )
         }
     }
