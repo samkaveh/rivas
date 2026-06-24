@@ -1,12 +1,24 @@
 use anyhow::Result;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TermCaps {
     pub cols: u16,
     pub rows: u16,
     pub cell_w_px: u16,
     pub cell_h_px: u16,
     pub has_kitty: bool,
+}
+
+impl Default for TermCaps {
+    fn default() -> Self {
+        Self {
+            cols: 80,
+            rows: 24,
+            cell_w_px: 8,
+            cell_h_px: 16,
+            has_kitty: true,
+        }
+    }
 }
 
 impl TermCaps {
