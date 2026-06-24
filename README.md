@@ -19,7 +19,7 @@ protocol.
 - Vim-style source editing with a side-by-side live preview.
 - Vim-style keyboard navigation in the rendered viewer.
 
-![rivas features demo](./rivas.gif)
+![demo of rivas features](./rivas.gif)
 
 ## Requirements
 
