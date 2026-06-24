@@ -45,6 +45,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let mut cache_key = hooks.use_ref(String::new);
     let mut cols = hooks.use_ref(|| 0u32);
     let mut rows = hooks.use_ref(|| 0u32);
+    let mut error_msg = hooks.use_state(|| None::<String>);
 
     let url = &props.url;
     let base_dir = props.file_path.parent();
@@ -60,32 +61,33 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         cols.set(0);
         rows.set(0);
         drawn_at.set((-1, -1));
+        error_msg.set(None);
     }
 
-    if data_cache.read().is_empty() {
+    if error_msg.read().is_none() && data_cache.read().is_empty() {
         let max_w = (vw as f32 * 100.0).round() as u32;
-        let loaded_image = match load_image_to_png(url.as_str(), base_dir, max_w) {
-            Ok(v) => v,
-            Err(e) => {
-                return element! {
-                    View() {
-                        Text(content: format!("Error: {:#}, Base directory: {:?}", e, base_dir))
-                    }
-                };
+        match load_image_to_png(url.as_str(), base_dir, max_w) {
+            Ok(loaded_image) => {
+                data_cache.set(loaded_image.0);
+                let mut cols_ = loaded_image.1;
+                let mut rows_ = loaded_image.2;
+                let caps = TermCaps::detect().unwrap_or_default();
+
+                cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
+                cols_ = cols_.min((vw as f32).round() as u32);
+                rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
+                rows_ = rows_.min(vh);
+
+                cols.set(cols_);
+                rows.set(rows_);
             }
-        };
-        data_cache.set(loaded_image.0);
-        let mut cols_ = loaded_image.1;
-        let mut rows_ = loaded_image.2;
-        let caps = TermCaps::detect().unwrap();
-
-        cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-        cols_ = cols_.min((vw as f32).round() as u32);
-        rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
-        rows_ = rows_.min(vh);
-
-        cols.set(cols_);
-        rows.set(rows_);
+            Err(e) => {
+                error_msg.set(Some(format!(
+                    "Error: {:#}, Base directory: {:?}",
+                    e, base_dir
+                )));
+            }
+        }
     }
 
     let render_image = hooks.use_async_handler(
@@ -136,7 +138,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
-            let caps = TermCaps::detect().unwrap();
+            let caps = TermCaps::detect().unwrap_or_default();
             let img_cols = *cols.read() as i32;
             let img_rows = *rows.read() as i32;
 
@@ -163,5 +165,14 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         }
     }
 
-    element! {View(width: cols.read().clone(), height: rows.read().clone())}
+    if let Some(err) = error_msg.read().clone() {
+        return element! {
+            View() {
+                Text(content: err, color: crate::theme::RED)
+            }
+        }
+        .into_any();
+    }
+
+    element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
 }

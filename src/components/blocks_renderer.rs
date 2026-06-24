@@ -13,6 +13,73 @@ use crate::components::thematic_break::ThematicBreak;
 use crate::document::model::Block;
 use iocraft::prelude::*;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+#[derive(Default, Props)]
+struct ScrollIntoViewContainerProps {
+    pub scroll_handle: Option<Ref<ScrollViewHandle>>,
+    pub viewport_height: Option<u32>,
+    pub cursor_moved: bool,
+    pub child: Option<Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static>>,
+}
+
+#[component]
+fn ScrollIntoViewContainer(
+    props: &ScrollIntoViewContainerProps,
+    mut hooks: Hooks,
+) -> impl Into<AnyElement<'static>> {
+    let rect = hooks.use_component_rect();
+    let mut needs_scroll = hooks.use_state(|| false);
+
+    if props.cursor_moved {
+        needs_scroll.set(true);
+    }
+
+    hooks.use_effect(
+        {
+            let mut needs_scroll = needs_scroll.clone();
+            let rect = rect.clone();
+            let scroll_handle = props.scroll_handle.clone();
+            let viewport_height = props.viewport_height;
+            move || {
+                if needs_scroll.get() {
+                    if let Some(r) = rect {
+                        if let Some(scroll_ref) = &scroll_handle {
+                            let mut scroll_ref = scroll_ref.clone();
+                            let block_top = r.top;
+                            let block_bottom = r.bottom;
+
+                            let viewport_h = scroll_ref.read().viewport_height() as i32;
+                            let viewport_top = 1; // offset for top border
+                            let viewport_bottom = viewport_top + viewport_h;
+
+                            if block_top < viewport_top {
+                                let diff = viewport_top - block_top;
+                                scroll_ref.write().scroll_by(-diff);
+                            } else if block_bottom > viewport_bottom {
+                                let diff = block_bottom - viewport_bottom;
+                                if (r.bottom - r.top) <= viewport_h {
+                                    scroll_ref.write().scroll_by(diff);
+                                } else {
+                                    let top_diff = block_top - viewport_top;
+                                    scroll_ref.write().scroll_by(top_diff);
+                                }
+                            }
+                            needs_scroll.set(false);
+                        }
+                    }
+                }
+            }
+        },
+        (needs_scroll.get(), rect.is_some()),
+    );
+
+    element! {
+        View() {
+            #(props.child.as_ref().map(|f| f()).into_iter())
+        }
+    }
+}
 
 #[derive(Default, Props)]
 pub struct BlocksRendererProps {
@@ -23,36 +90,65 @@ pub struct BlocksRendererProps {
     pub viewport_width: Option<u32>,
     pub cursor_offset: Option<Ref<usize>>,
     pub editor_state: Option<Ref<Option<EditorState>>>,
+    pub scroll_handle: Option<Ref<ScrollViewHandle>>,
 }
 
 #[component]
 pub fn BlocksRenderer(
     props: &BlocksRendererProps,
-    _hooks: Hooks,
+    mut hooks: Hooks,
 ) -> impl Into<AnyElement<'static>> {
+    let cursor_offset_val = props.cursor_offset.as_ref().map(|r| r.get());
+    let last_offset = hooks.use_state(|| cursor_offset_val.unwrap_or(0));
+    let cursor_moved = cursor_offset_val.map_or(false, |off| off != last_offset.get());
+
+    hooks.use_effect(
+        {
+            let mut last_offset = last_offset.clone();
+            move || {
+                if let Some(off) = cursor_offset_val {
+                    last_offset.set(off);
+                }
+            }
+        },
+        cursor_offset_val,
+    );
     let file_path = props.file_path.clone();
     let vh = props.viewport_height;
     let vw = props.viewport_width;
     let cursor_offset = props.cursor_offset.as_ref().map(|r| r.get());
 
-    let (vis_start, vis_end, mode) = if let Some(state_ref) = &props.editor_state {
-        let s_opt = state_ref.read();
-        if let Some(s) = s_opt.as_ref() {
-            let start = s.absolute_byte_offset_at(s.visual_start.0, s.visual_start.1);
-            let end = s.absolute_byte_offset();
-            (Some(start.min(end)), Some(start.max(end)), s.mode.clone())
+    let (vis_start, vis_end, mode, is_editing_mode, cursor_row_col) =
+        if let Some(state_ref) = &props.editor_state {
+            let s_opt = state_ref.read();
+            if let Some(s) = s_opt.as_ref() {
+                let start = s.absolute_byte_offset_at(s.visual_start.0, s.visual_start.1);
+                let end = s.absolute_byte_offset();
+                let editing = matches!(s.mode, Mode::Insert | Mode::Command | Mode::Search { .. });
+                (
+                    Some(start.min(end)),
+                    Some(start.max(end)),
+                    s.mode.clone(),
+                    editing,
+                    Some((s.row, s.col)),
+                )
+            } else {
+                (None, None, Mode::Normal, false, None)
+            }
         } else {
-            (None, None, Mode::Normal)
-        }
-    } else {
-        (None, None, Mode::Normal)
-    };
+            (None, None, Mode::Normal, false, None)
+        };
 
     element! {
         View(flex_direction: FlexDirection::Column) {
             #(props.blocks.iter().map(|block| {
                 let span = block.span();
-                let is_active = cursor_offset.map_or(false, |off| off >= span.0 && off <= span.1);
+                // is_cursor_here: cursor is on this block (any mode)
+                let is_cursor_here = cursor_offset.map_or(false, |off| off >= span.0 && off <= span.1);
+                // Only show raw text editing view when cursor is on the block AND
+                // the editor is in an editing mode (Insert/Command/Search).
+                // In Normal mode, blocks stay as their rendered markdown form (view-only).
+                let is_active = is_editing_mode && is_cursor_here;
                 let is_selected = mode == Mode::Visual && vis_start.map_or(false, |start| {
                     vis_end.map_or(false, |end| {
                         span.0 <= end && span.1 >= start
@@ -175,77 +271,97 @@ pub fn BlocksRenderer(
                                                 if seg_idx == seg_idx_cursor {
                                                     let (before, after_with_char) = segment.split_at(seg_rel_off.min(segment.len()));
 
-                                                    if let Some(c) = after_with_char.chars().next() {
-                                                        let char_len = c.len_utf8();
-                                                        let after = &after_with_char[char_len..];
+                                                    let before_str = before.to_string();
+                                                    let cursor_char_str = cursor_char.to_string();
+                                                    let cursor_bg_final_clone = cursor_bg_final.clone();
+                                                    let cursor_fg_clone = cursor_fg.clone();
+                                                    let editor_state_clone = props.editor_state.clone();
 
-                                                        if let Some(state_ref) = &props.editor_state {
-                                                            let s_opt = state_ref.read();
-                                                            if let Some(s) = s_opt.as_ref() {
-                                                                if s.mode == Mode::Insert {
-                                                                    element! {
-                                                                        View(flex_direction: FlexDirection::Row) {
-                                                                            Text(content: before, color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                            View(background_color: cursor_bg_final, width: 1) {
-                                                                                Text(content: cursor_char, color: cursor_fg, wrap: TextWrap::Wrap)
+                                                    let factory = if let Some(c) = after_with_char.chars().next() {
+                                                        let char_len = c.len_utf8();
+                                                        let after_str = after_with_char[char_len..].to_string();
+                                                        let c_str = c.to_string();
+
+                                                        Arc::new(move || {
+                                                            if let Some(state_ref) = &editor_state_clone {
+                                                                let s_opt = state_ref.read();
+                                                                if let Some(s) = s_opt.as_ref() {
+                                                                    if s.mode == Mode::Insert {
+                                                                        element! {
+                                                                            View(flex_direction: FlexDirection::Row) {
+                                                                                Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                View(background_color: cursor_bg_final_clone, width: 1) {
+                                                                                    Text(content: cursor_char_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
+                                                                                }
+                                                                                Text(content: format!("{}{}", c_str, after_str), color: crate::theme::FG, wrap: TextWrap::Wrap)
                                                                             }
-                                                                            Text(content: &format!("{}{}", c, after), color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                        }
-                                                                    }.into_any()
-                                                                } else if s.operator.is_some() {
-                                                                    element! {
-                                                                        View(flex_direction: FlexDirection::Row) {
-                                                                            Text(content: before, color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                            View(background_color: cursor_bg_final, width: 1) {
-                                                                                Text(content: c.to_string(), color: cursor_fg, wrap: TextWrap::Wrap)
+                                                                        }.into_any()
+                                                                    } else if s.operator.is_some() {
+                                                                        element! {
+                                                                            View(flex_direction: FlexDirection::Row) {
+                                                                                Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                View(background_color: cursor_bg_final_clone, width: 1) {
+                                                                                    Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
+                                                                                }
+                                                                                Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
                                                                             }
-                                                                            Text(content: after, color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                        }
-                                                                    }.into_any()
+                                                                        }.into_any()
+                                                                    } else {
+                                                                        element! {
+                                                                            View(flex_direction: FlexDirection::Row) {
+                                                                                Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                View(background_color: cursor_bg_final_clone, width: 1) {
+                                                                                    Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
+                                                                                }
+                                                                                Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                            }
+                                                                        }.into_any()
+                                                                    }
                                                                 } else {
                                                                     element! {
                                                                         View(flex_direction: FlexDirection::Row) {
-                                                                            Text(content: before, color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                            View(background_color: cursor_bg_final, width: 1) {
-                                                                                Text(content: c.to_string(), color: cursor_fg, wrap: TextWrap::Wrap)
+                                                                            Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                            View(background_color: cursor_bg_final_clone, width: 1) {
+                                                                                Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                             }
-                                                                            Text(content: after, color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                            Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
                                                                         }
                                                                     }.into_any()
                                                                 }
                                                             } else {
                                                                 element! {
                                                                     View(flex_direction: FlexDirection::Row) {
-                                                                        Text(content: before, color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                        View(background_color: cursor_bg_final, width: 1) {
-                                                                            Text(content: c.to_string(), color: cursor_fg, wrap: TextWrap::Wrap)
+                                                                        Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                        View(background_color: cursor_bg_final_clone, width: 1) {
+                                                                            Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                         }
-                                                                        Text(content: after, color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                        Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
                                                                     }
                                                                 }.into_any()
                                                             }
-                                                        } else {
+                                                        }) as Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static>
+                                                    } else {
+                                                        Arc::new(move || {
                                                             element! {
                                                                 View(flex_direction: FlexDirection::Row) {
-                                                                    Text(content: before, color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                    View(background_color: cursor_bg_final, width: 1) {
-                                                                        Text(content: c.to_string(), color: cursor_fg, wrap: TextWrap::Wrap)
+                                                                    Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                    View(background_color: cursor_bg_final_clone, width: 1) {
+                                                                        Text(content: cursor_char_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                     }
-                                                                    Text(content: after, color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                    Text(content: "", color: crate::theme::FG, wrap: TextWrap::Wrap)
                                                                 }
                                                             }.into_any()
-                                                        }
-                                                    } else {
-                                                        element! {
-                                                            View(flex_direction: FlexDirection::Row) {
-                                                                Text(content: before, color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                                View(background_color: cursor_bg_final, width: 1) {
-                                                                    Text(content: cursor_char, color: cursor_fg, wrap: TextWrap::Wrap)
-                                                                }
-                                                                Text(content: "", color: crate::theme::FG, wrap: TextWrap::Wrap)
-                                                            }
-                                                        }.into_any()
-                                                    }
+                                                        }) as Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static>
+                                                    };
+
+                                                    element! {
+                                                        ScrollIntoViewContainer(
+                                                            scroll_handle: props.scroll_handle.clone(),
+                                                            viewport_height: props.viewport_height,
+                                                            cursor_moved,
+                                                            child: Some(factory),
+                                                        )
+                                                    }.into_any()
                                                 } else {
                                                     element! { Text(content: segment.to_string(), color: crate::theme::FG, wrap: TextWrap::Wrap) }.into_any()
                                                 }
@@ -259,7 +375,10 @@ pub fn BlocksRenderer(
                         }
                     }.into_any()
                 } else {
-                    match block {
+                    // Render block as formatted markdown.
+                    // If cursor is on this block (Normal mode), wrap with a left-border
+                    // accent so the user can see where the cursor is before pressing `i`.
+                    let rendered = match block {
                         Block::Heading { level, content, id: _, .. } => element!{Heading(level: *level, content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::Paragraph { content, .. } => element!{Paragraph(content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::Code { language, code, .. } => element!{CodeBlock(language: language.clone(), code: code.clone())}.into_any(),
@@ -271,6 +390,111 @@ pub fn BlocksRenderer(
                         Block::ThematicBreak{..} => element!{ThematicBreak()}.into_any(),
                         Block::Image { alt, url, title, .. } => element!{Image(url: url.clone(), file_path: file_path.clone(), title: title.clone(), alt: Some(alt.clone()), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::Html { content, .. } => element!{HtmlBlock(content: content.clone())}.into_any(),
+                    };
+
+                    if is_cursor_here && !is_editing_mode {
+                        // Show a left-border accent indicator on the active block
+                        // so the user knows where the cursor is in Normal mode.
+                        let off = cursor_offset.unwrap_or(0);
+                        let text = &props.content[span.0..span.1];
+                        let rel_off = off.saturating_sub(span.0).min(text.len());
+
+                        let lines: Vec<&str> = text.split('\n').collect();
+                        let mut current_byte_acc = 0;
+                        let mut cursor_line_idx = None;
+                        let mut cursor_rel_off = 0;
+
+                        for (idx, line) in lines.iter().enumerate() {
+                            let line_len = line.len();
+                            if rel_off >= current_byte_acc && rel_off <= current_byte_acc + line_len {
+                                cursor_line_idx = Some(idx);
+                                cursor_rel_off = rel_off - current_byte_acc;
+                            }
+                            current_byte_acc += line_len + 1;
+                        }
+
+                        let mut cursor_line_text = "";
+                        let mut cursor_char_idx = 0;
+                        if let Some(idx) = cursor_line_idx {
+                            if idx < lines.len() {
+                                cursor_line_text = lines[idx];
+                                cursor_char_idx = cursor_rel_off;
+                            }
+                        }
+
+                        let before = &cursor_line_text[..cursor_char_idx.min(cursor_line_text.len())];
+                        let char_at_cursor = cursor_line_text.char_indices()
+                            .find(|&(idx, _)| idx == cursor_char_idx)
+                            .map(|(_, c)| c);
+                        let cursor_char = char_at_cursor.map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+                        let after = if let Some(c) = char_at_cursor {
+                            let char_len = c.len_utf8();
+                            &cursor_line_text[(cursor_char_idx + char_len).min(cursor_line_text.len())..]
+                        } else {
+                            ""
+                        };
+
+                        let block_clone = block.clone();
+                        let file_path_clone = file_path.clone();
+                        let vh_clone = vh;
+                        let vw_clone = vw;
+                        let before_str = before.to_string();
+                        let cursor_char_str = cursor_char.to_string();
+                        let after_str = after.to_string();
+                        let cursor_row_col_clone = cursor_row_col.clone();
+
+                        let factory: Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static> = Arc::new(move || {
+                            let rendered = match &block_clone {
+                                Block::Heading { level, content, id: _, .. } => element!{Heading(level: *level, content: content.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Paragraph { content, .. } => element!{Paragraph(content: content.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Code { language, code, .. } => element!{CodeBlock(language: language.clone(), code: code.clone())}.into_any(),
+                                Block::Mermaid { source, .. } => element!{MermaidBlock(source: source.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Math { content, display, .. } => element!{MathBlock(content: content.clone(), display: *display, viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Quote { children, .. } => element!{QuoteBlock(children: children.clone(), file_path: Some(file_path_clone.clone()), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::List { ordered, start, items, .. } => element!{ListBlock(ordered: *ordered, start: *start, items: items.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Table { headers, alignments, rows, .. } => element!{TableBlock(headers: headers.clone(), alignments: alignments.clone(), rows: rows.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::ThematicBreak{..} => element!{ThematicBreak()}.into_any(),
+                                Block::Image { alt, url, title, .. } => element!{Image(url: url.clone(), file_path: file_path_clone.clone(), title: title.clone(), alt: Some(alt.clone()), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Html { content, .. } => element!{HtmlBlock(content: content.clone())}.into_any(),
+                            };
+
+                            element! {
+                                View(flex_direction: FlexDirection::Column) {
+                                    View(flex_direction: FlexDirection::Row) {
+                                        View(width: 2, background_color: crate::theme::BLUE) {}
+                                        View(flex_grow: 1.0, background_color: crate::theme::STATUS_BG) {
+                                            #(Some(rendered).into_iter())
+                                        }
+                                    }
+                                    View(
+                                        padding_left: 4,
+                                        padding_right: 2,
+                                        margin_bottom: 1,
+                                        flex_direction: FlexDirection::Row,
+                                        background_color: crate::theme::DARK_BG,
+                                    ) {
+                                        Text(content: "↳ ", color: crate::theme::BLUE, weight: Weight::Bold)
+                                        Text(content: format!("Ln {}, Col {}: ", cursor_row_col_clone.map(|(r,_)| r + 1).unwrap_or(1), cursor_row_col_clone.map(|(_,c)| c).unwrap_or(0)), color: crate::theme::YELLOW)
+                                        Text(content: before_str.clone(), color: crate::theme::FG)
+                                        View(background_color: crate::theme::BLUE) {
+                                            Text(content: cursor_char_str.clone(), color: crate::theme::DARK_BG)
+                                        }
+                                        Text(content: after_str.clone(), color: crate::theme::FG)
+                                    }
+                                }
+                            }.into_any()
+                        });
+
+                        element! {
+                            ScrollIntoViewContainer(
+                                scroll_handle: props.scroll_handle.clone(),
+                                viewport_height: props.viewport_height,
+                                cursor_moved,
+                                child: Some(factory),
+                            )
+                        }.into_any()
+                    } else {
+                        rendered
                     }
                 }
             }))
