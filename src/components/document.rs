@@ -123,6 +123,9 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             let mut cursor_row = None;
             if let Some(s) = editor_state.write().as_mut() {
                 let before = s.buf.to_text();
+                s.view_height = vh.unwrap_or(20) as usize;
+                s.view_width = vw.unwrap_or(80) as usize;
+
                 if handle_key(s, code, ctrl) {
                     quit = true;
                 }
