@@ -1,3 +1,4 @@
+use crate::theme;
 /// iocraft neovim-style modal editor
 ///
 /// Rewritten to use the declarative element!/component macro API instead of
@@ -16,7 +17,6 @@
 /// Misc: x X J ~ >> <<  Ctrl-d/u/f/b  PageUp/Down
 use iocraft::prelude::*;
 use std::collections::{HashMap, VecDeque};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Buffer
 // ─────────────────────────────────────────────────────────────────────────────
@@ -342,10 +342,10 @@ impl Mode {
     }
     pub fn color(&self) -> Color {
         match self {
-            Mode::Normal => crate::theme::BLUE,
-            Mode::Insert => crate::theme::GREEN,
-            Mode::Visual => crate::theme::MAGENTA,
-            Mode::Command | Mode::Search { .. } => crate::theme::YELLOW,
+            Mode::Normal => theme::BLUE,
+            Mode::Insert => theme::GREEN,
+            Mode::Visual => theme::MAGENTA,
+            Mode::Command | Mode::Search { .. } => theme::YELLOW,
         }
     }
 }

@@ -6,6 +6,7 @@ use crate::components::blocks_renderer::BlocksRenderer;
 use crate::components::editor::{Buffer, EditorState, Mode, handle_key};
 use crate::document::cache::ParseCache;
 use crate::document::parser::parse_markdown;
+use crate::theme;
 
 #[derive(Default, Props)]
 pub struct DocumentProps {
@@ -244,13 +245,13 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     let file_path = props.file_path.clone();
 
     element! {
-    View(width: vw.unwrap_or(100), height: vh.unwrap_or(100), flex_direction: FlexDirection::Column, background_color: crate::theme::BG) {
-        View(flex_grow: 1.0, border_style: BorderStyle::Single, border_color: crate::theme::BORDER){
+    View(width: vw.unwrap_or(100), height: vh.unwrap_or(100), flex_direction: FlexDirection::Column, background_color: theme::BG) {
+        View(flex_grow: 1.0, border_style: BorderStyle::Single, border_color: theme::BORDER){
                 ScrollView(
                     handle: Some(scroll_handle),
                     keyboard_scroll: Some(false),
-                    scrollbar_thumb_color: Some(crate::theme::FG),
-                    scrollbar_track_color: Some(crate::theme::DARK_BG),
+                    scrollbar_thumb_color: Some(theme::FG),
+                    scrollbar_track_color: Some(theme::DARK_BG),
                 ) {
                     View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_top: 1, padding_bottom: 1) {
                         BlocksRenderer(
@@ -266,22 +267,22 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     }
                 }
             }
-            View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
+            View(width: 100pct, height: 1, background_color: theme::STATUS_BG, flex_direction: FlexDirection::Row) {
                 View(background_color: current_mode.color(), padding_left: 1, padding_right: 1) {
-                    Text(content: format!(" {} ", current_mode.label()), color: crate::theme::DARK_BG, weight: Weight::Bold)
+                    Text(content: format!(" {} ", current_mode.label()), color: theme::DARK_BG, weight: Weight::Bold)
                 }
                 View(flex_grow: 1.0, padding_left: 1) {
                     #(if current_mode == Mode::Command {
                         Some(element! {
-                            Text(content: format!(":{}", current_cmd), color: crate::theme::FG)
+                            Text(content: format!(":{}", current_cmd), color: theme::FG)
                         })
                     } else if let Mode::Search { .. } = current_mode {
                         Some(element! {
-                            Text(content: current_cmd.clone(), color: crate::theme::FG)
+                            Text(content: current_cmd.clone(), color: theme::FG)
                         })
                     } else {
                         Some(element! {
-                            Text(content: current_msg.clone(), color: crate::theme::FG)
+                            Text(content: current_msg.clone(), color: theme::FG)
                         })
                     }.into_iter())
                 }

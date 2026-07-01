@@ -1,4 +1,5 @@
 use crate::output::kitty;
+use crate::theme;
 use crate::{assets::images::load_image_to_png, output::capabilities::TermCaps};
 use iocraft::prelude::*;
 use std::{io::Write, path::PathBuf};
@@ -19,7 +20,7 @@ pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>
         View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
             #(props.title.clone().map(|title| element! {
             View() {
-                Text(content: title, color: crate::theme::COMMENT)
+                Text(content: title, color: theme::COMMENT)
             }
             }))
             KittyImage(url: props.url.clone(), file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
@@ -168,7 +169,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     if let Some(err) = error_msg.read().clone() {
         return element! {
             View() {
-                Text(content: err, color: crate::theme::RED)
+                Text(content: err, color: theme::RED)
             }
         }
         .into_any();

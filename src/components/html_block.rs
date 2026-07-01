@@ -1,5 +1,5 @@
+use crate::theme;
 use iocraft::prelude::*;
-
 #[derive(Default, Props)]
 pub struct HtmlBlockProps {
     pub content: String,
@@ -19,10 +19,10 @@ pub fn HtmlBlock(props: &HtmlBlockProps, _hooks: Hooks) -> impl Into<AnyElement<
     element! {
         View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, margin_bottom: 1, border_style: BorderStyle::Single) {
             View() {
-                Text(content: "HTML Block".to_string(), color: crate::theme::RED)
+                Text(content: "HTML Block".to_string(), color: theme::RED)
             }
             View {
-                Text(content: preview, color: crate::theme::COMMENT)
+                Text(content: preview, color: theme::COMMENT)
             }
         }
     }

@@ -3713,6 +3713,7 @@ dependencies = [
  "typst",
  "typst-assets",
  "typst-svg",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

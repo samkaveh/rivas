@@ -11,9 +11,11 @@ use crate::components::quote_block::QuoteBlock;
 use crate::components::table_block::TableBlock;
 use crate::components::thematic_break::ThematicBreak;
 use crate::document::model::Block;
+use crate::theme;
 use iocraft::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Default, Props)]
 struct ScrollIntoViewContainerProps {
@@ -40,7 +42,6 @@ fn ScrollIntoViewContainer(
             let mut needs_scroll = needs_scroll.clone();
             let rect = rect.clone();
             let scroll_handle = props.scroll_handle.clone();
-            let viewport_height = props.viewport_height;
             move || {
                 if needs_scroll.get() {
                     if let Some(r) = rect {
@@ -178,32 +179,32 @@ pub fn BlocksRenderer(
                     }
 
                     let cursor_bg = match mode {
-                        Mode::Normal => crate::theme::FG,
-                        Mode::Insert => crate::theme::GREEN,
-                        Mode::Visual => crate::theme::MAGENTA,
-                        Mode::Command | Mode::Search { .. } => crate::theme::YELLOW,
+                        Mode::Normal => theme::FG,
+                        Mode::Insert => theme::GREEN,
+                        Mode::Visual => theme::MAGENTA,
+                        Mode::Command | Mode::Search { .. } => theme::YELLOW,
                     };
 
                     let (cursor_fg, cursor_bg_final, cursor_char) = if let Some(state_ref) = &props.editor_state {
                         let s_opt = state_ref.read();
                         if let Some(s) = s_opt.as_ref() {
                             if s.mode == Mode::Insert {
-                                (cursor_bg, crate::theme::DARK_BG, "┃")
+                                (cursor_bg, theme::DARK_BG, "┃")
                             } else if s.operator.is_some() {
-                                (cursor_bg, crate::theme::DARK_BG, "_")
+                                (cursor_bg, theme::DARK_BG, "_")
                             } else {
-                                (crate::theme::DARK_BG, cursor_bg, " ")
+                                (theme::DARK_BG, cursor_bg, " ")
                             }
                         } else {
-                            (crate::theme::DARK_BG, cursor_bg, " ")
+                            (theme::DARK_BG, cursor_bg, " ")
                         }
                     } else {
-                        (crate::theme::DARK_BG, cursor_bg, " ")
+                        (theme::DARK_BG, cursor_bg, " ")
                     };
 
                     element! {
                         View(
-                            background_color: crate::theme::DARK_BG,
+                            background_color: theme::DARK_BG,
                             padding_left: 2,
                             padding_right: 2,
                             flex_direction: FlexDirection::Column,
@@ -211,7 +212,7 @@ pub fn BlocksRenderer(
                         ) {
                             #(lines.iter().enumerate().map(|(idx, line)| {
                                 let line_start_off = span.0 + lines[..idx].iter().map(|l| l.len() + 1).sum::<usize>();
-                                let wrap_width = (vw.unwrap_or(80) as i32 - crate::theme::TOTAL_VIEWPORT_OFFSET as i32).max(1) as usize;
+                                let wrap_width = (vw.unwrap_or(80) as i32 - theme::TOTAL_VIEWPORT_OFFSET as i32).max(1) as usize;
                                 let mut segments = Vec::new();
                                 let mut remaining: &str = line;
                                 while !remaining.is_empty() {
@@ -256,12 +257,12 @@ pub fn BlocksRenderer(
                                                     element! {
                                                         View(flex_direction: FlexDirection::Row) {
                                                             #(line_parts.iter().map(|(selected, text)| element! {
-                                                                Text(content: text.clone(), color: if *selected { crate::theme::MAGENTA } else { crate::theme::FG }, wrap: TextWrap::Wrap)
+                                                                Text(content: text.clone(), color: if *selected { theme::MAGENTA } else { theme::FG }, wrap: TextWrap::Wrap)
                                                             }))
                                                         }
                                                     }.into_any()
                                                 } else {
-                                                    element! { Text(content: segment.to_string(), color: crate::theme::FG, wrap: TextWrap::Wrap) }.into_any()
+                                                    element! { Text(content: segment.to_string(), color: theme::FG, wrap: TextWrap::Wrap) }.into_any()
                                                 }
                                             } else if Some(idx) == cursor_line_idx {
                                                 let mut seg_idx_cursor = 0;
@@ -292,53 +293,53 @@ pub fn BlocksRenderer(
                                                                     if s.mode == Mode::Insert {
                                                                         element! {
                                                                             View(flex_direction: FlexDirection::Row) {
-                                                                                Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                Text(content: before_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                                 View(background_color: cursor_bg_final_clone, width: 1) {
                                                                                     Text(content: cursor_char_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                                 }
-                                                                                Text(content: format!("{}{}", c_str, after_str), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                Text(content: format!("{}{}", c_str, after_str), color: theme::FG, wrap: TextWrap::Wrap)
                                                                             }
                                                                         }.into_any()
                                                                     } else if s.operator.is_some() {
                                                                         element! {
                                                                             View(flex_direction: FlexDirection::Row) {
-                                                                                Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                Text(content: before_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                                 View(background_color: cursor_bg_final_clone, width: 1) {
                                                                                     Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                                 }
-                                                                                Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                Text(content: after_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                             }
                                                                         }.into_any()
                                                                     } else {
                                                                         element! {
                                                                             View(flex_direction: FlexDirection::Row) {
-                                                                                Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                Text(content: before_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                                 View(background_color: cursor_bg_final_clone, width: 1) {
                                                                                     Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                                 }
-                                                                                Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                                Text(content: after_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                             }
                                                                         }.into_any()
                                                                     }
                                                                 } else {
                                                                     element! {
                                                                         View(flex_direction: FlexDirection::Row) {
-                                                                            Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                            Text(content: before_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                             View(background_color: cursor_bg_final_clone, width: 1) {
                                                                                 Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                             }
-                                                                            Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                            Text(content: after_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                         }
                                                                     }.into_any()
                                                                 }
                                                             } else {
                                                                 element! {
                                                                     View(flex_direction: FlexDirection::Row) {
-                                                                        Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                        Text(content: before_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                         View(background_color: cursor_bg_final_clone, width: 1) {
                                                                             Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                         }
-                                                                        Text(content: after_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                        Text(content: after_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                     }
                                                                 }.into_any()
                                                             }
@@ -347,11 +348,11 @@ pub fn BlocksRenderer(
                                                         Arc::new(move || {
                                                             element! {
                                                                 View(flex_direction: FlexDirection::Row) {
-                                                                    Text(content: before_str.clone(), color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                    Text(content: before_str.clone(), color: theme::FG, wrap: TextWrap::Wrap)
                                                                     View(background_color: cursor_bg_final_clone, width: 1) {
                                                                         Text(content: cursor_char_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
                                                                     }
-                                                                    Text(content: "", color: crate::theme::FG, wrap: TextWrap::Wrap)
+                                                                    Text(content: "", color: theme::FG, wrap: TextWrap::Wrap)
                                                                 }
                                                             }.into_any()
                                                         }) as Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static>
@@ -366,10 +367,10 @@ pub fn BlocksRenderer(
                                                         )
                                                     }.into_any()
                                                 } else {
-                                                    element! { Text(content: segment.to_string(), color: crate::theme::FG, wrap: TextWrap::Wrap) }.into_any()
+                                                    element! { Text(content: segment.to_string(), color: theme::FG, wrap: TextWrap::Wrap) }.into_any()
                                                 }
                                             } else {
-                                                element! { Text(content: segment.to_string(), color: crate::theme::FG, wrap: TextWrap::Wrap) }.into_any()
+                                                element! { Text(content: segment.to_string(), color: theme::FG, wrap: TextWrap::Wrap) }.into_any()
                                             }
                                         }))
                                     }
@@ -464,8 +465,8 @@ pub fn BlocksRenderer(
                             element! {
                                 View(flex_direction: FlexDirection::Column) {
                                     View(flex_direction: FlexDirection::Row) {
-                                        View(width: 2, background_color: crate::theme::BLUE) {}
-                                        View(flex_grow: 1.0, background_color: crate::theme::STATUS_BG) {
+                                        View(width: 2, background_color: theme::BLUE) {}
+                                        View(flex_grow: 1.0, background_color: theme::STATUS_BG) {
                                             #(Some(rendered).into_iter())
                                         }
                                     }
@@ -474,15 +475,15 @@ pub fn BlocksRenderer(
                                         padding_right: 2,
                                         margin_bottom: 1,
                                         flex_direction: FlexDirection::Row,
-                                        background_color: crate::theme::DARK_BG,
+                                        background_color: theme::DARK_BG,
                                     ) {
-                                        Text(content: "↳ ", color: crate::theme::BLUE, weight: Weight::Bold)
-                                        Text(content: format!("Ln {}, Col {}: ", cursor_row_col_clone.map(|(r,_)| r + 1).unwrap_or(1), cursor_row_col_clone.map(|(_,c)| c).unwrap_or(0)), color: crate::theme::YELLOW)
-                                        Text(content: before_str.clone(), color: crate::theme::FG)
-                                        View(background_color: crate::theme::BLUE) {
-                                            Text(content: cursor_char_str.clone(), color: crate::theme::DARK_BG)
+                                        Text(content: "↳ ", color: theme::BLUE, weight: Weight::Bold)
+                                        Text(content: format!("Ln {}, Col {}: ", cursor_row_col_clone.map(|(r,_)| r + 1).unwrap_or(1), cursor_row_col_clone.map(|(_,c)| c).unwrap_or(0)), color: theme::YELLOW)
+                                        Text(content: before_str.clone(), color: theme::FG)
+                                        View(background_color: theme::BLUE) {
+                                            Text(content: cursor_char_str.clone(), color: theme::DARK_BG)
                                         }
-                                        Text(content: after_str.clone(), color: crate::theme::FG)
+                                        Text(content: after_str.clone(), color: theme::FG)
                                     }
                                 }
                             }.into_any()

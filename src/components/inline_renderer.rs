@@ -1,6 +1,7 @@
 use crate::components::image::KittyImage;
 use crate::components::math_block::KittyMath;
 use crate::document::model::Inline;
+use crate::theme;
 use iocraft::prelude::*;
 use std::path::PathBuf;
 
@@ -89,14 +90,13 @@ fn render_inlines_recursive(
             }
             Inline::Code(c) => {
                 out.push(
-                    element! { Text(content: format!(" {} ", c), color: crate::theme::GREEN) }
-                        .into_any(),
+                    element! { Text(content: format!(" {} ", c), color: theme::GREEN) }.into_any(),
                 );
             }
             Inline::Link { text, url, .. } => {
                 render_inlines_recursive(
                     text,
-                    crate::theme::BLUE,
+                    theme::BLUE,
                     bold,
                     italic,
                     file_path,
@@ -105,7 +105,7 @@ fn render_inlines_recursive(
                     out,
                 );
                 out.push(
-                    element! { Text(content: format!(" ({})", url), color: crate::theme::COMMENT) }
+                    element! { Text(content: format!(" ({})", url), color: theme::COMMENT) }
                         .into_any(),
                 );
             }

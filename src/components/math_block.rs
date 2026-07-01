@@ -1,10 +1,10 @@
-use iocraft::prelude::*;
-use std::io::Write;
-
+use crate::theme;
 use crate::{
     assets::math::render_math,
     output::{capabilities::TermCaps, kitty},
 };
+use iocraft::prelude::*;
+use std::io::Write;
 
 #[derive(Default, Props)]
 pub struct MathBlockProps {
@@ -155,7 +155,7 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     if let Some(err) = error_msg.read().clone() {
         return element! {
             View() {
-                Text(content: err, color: crate::theme::RED)
+                Text(content: err, color: theme::RED)
             }
         }
         .into_any();
