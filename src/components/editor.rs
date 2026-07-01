@@ -1,22 +1,6 @@
-/// iocraft neovim-style modal editor
-///
-/// Rewritten to use the declarative element!/component macro API instead of
-/// raw Component::draw(), since CanvasTextStyle does not carry color/background
-/// — those are View/Text props in the element tree.
-///
-/// Modes:  Normal, Insert, Visual (char), Command, Search
-/// Motions: h j k l  w b e  0 ^ $  gg G  { }  f/t/F/T  ; ,
-/// Operators: d c y  (+ dd cc yy)
-/// Insert: i I a A o O  s S
-/// Visual: v + motions + d/c/y
-/// Command: :w :q :wq :q! :wq! :<n>  ZZ ZQ
-/// Undo/Redo: u  Ctrl-r
-/// Paste: p P
-/// Search: /pat  ?pat  n N
-/// Misc: x X J ~ >> <<  Ctrl-d/u/f/b  PageUp/Down
+use crate::theme;
 use iocraft::prelude::*;
 use std::collections::{HashMap, VecDeque};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Buffer
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,13 +241,21 @@ impl Buffer {
         for offset in 0..total {
             let row = (start_row + offset) % total;
             let line = self.line(row);
-            let from = if offset == 0 {
-                (start_col + 1).min(line.len())
+            let from_byte = if offset == 0 {
+                let here = self.byte_offset(row, start_col);
+                line[here..]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| here + i)
+                    .unwrap_or(line.len())
             } else {
                 0
             };
-            if let Some(pos) = line[from..].find(pat) {
-                return Some((row, from + pos));
+
+            if let Some(pos) = line[from_byte..].find(pat) {
+                let match_byte = from_byte + pos;
+                let col = line[..match_byte].chars().count();
+                return Some((row, col));
             }
         }
         None
@@ -286,13 +278,15 @@ impl Buffer {
                 total - (offset - start_row)
             };
             let line = self.line(row);
-            let to = if offset == 0 {
-                start_col.min(line.len())
+            let to_byte = if offset == 0 {
+                self.byte_offset(row, start_col)
             } else {
                 line.len()
             };
-            if let Some(pos) = line[..to].rfind(pat) {
-                return Some((row, pos));
+
+            if let Some(pos) = line[..to_byte].rfind(pat) {
+                let col = line[..pos].chars().count();
+                return Some((row, col));
             }
         }
         None
@@ -332,10 +326,10 @@ impl Mode {
     }
     pub fn color(&self) -> Color {
         match self {
-            Mode::Normal => crate::theme::BLUE,
-            Mode::Insert => crate::theme::GREEN,
-            Mode::Visual => crate::theme::MAGENTA,
-            Mode::Command | Mode::Search { .. } => crate::theme::YELLOW,
+            Mode::Normal => theme::BLUE,
+            Mode::Insert => theme::GREEN,
+            Mode::Visual => theme::MAGENTA,
+            Mode::Command | Mode::Search { .. } => theme::YELLOW,
         }
     }
 }
@@ -373,7 +367,6 @@ pub struct EditorState {
     pub message: String,
     pub last_search: String,
     pub search_forward: bool,
-    pub request_view: bool,
     pub view_height: usize,
     pub view_width: usize,
 }
@@ -410,7 +403,6 @@ impl EditorState {
             message: String::new(),
             last_search: String::new(),
             search_forward: true,
-            request_view: false,
             view_height: 20,
             view_width: 80,
         }
@@ -741,127 +733,12 @@ impl EditorState {
                 let _ = std::fs::write(&self.filename, self.buf.to_text());
                 true
             }
-            "view" | "render" | "preview" => {
-                self.request_view = true;
-                false
-            }
             other => {
                 self.message = format!("E: Not an editor command: {}", other);
                 false
             }
         }
     }
-
-    // Called from the iocraft component each frame to produce render data
-    // Produces one RenderedLine per visible row. Each line is a Vec<Run> — consecutive
-    // chars with identical style are merged into one element, typically giving 2-4 runs
-    // per line instead of one element per character. Cuts element count ~40x.
-    fn render_lines(&self, view_height: usize, view_width: usize) -> Vec<RenderedLine> {
-        let text_w = view_width.saturating_sub(5);
-        let line_bg = crate::theme::STATUS_BG;
-        let normal_bg = crate::theme::BG;
-
-        let (vr1, vc1, vr2, vc2) = if self.mode == Mode::Visual {
-            let (ar, ac) = self.visual_start;
-            let (br, bc) = (self.row, self.col);
-            if (ar, ac) <= (br, bc) {
-                (ar, ac, br, bc)
-            } else {
-                (br, bc, ar, ac)
-            }
-        } else {
-            (0, 0, 0, 0)
-        };
-
-        (0..view_height)
-            .map(|screen_row| {
-                let buf_row = screen_row + self.scroll;
-                let is_cur = buf_row == self.row;
-
-                if buf_row >= self.buf.line_count() {
-                    return RenderedLine::Tilde;
-                }
-
-                let bg = if is_cur { line_bg } else { normal_bg };
-                let line = self.buf.line(buf_row);
-                let chars: Vec<char> = line.chars().collect();
-                let cursor_col = self.col.min(chars.len().max(1) - 1);
-                let mut runs: Vec<Run> = Vec::new();
-
-                for col in 0..text_w {
-                    let ch = chars.get(col).copied().unwrap_or(' ');
-
-                    let is_cursor = is_cur && col == cursor_col;
-                    let in_visual = self.mode == Mode::Visual
-                        && ((buf_row > vr1 && buf_row < vr2)
-                            || (buf_row == vr1 && buf_row == vr2 && col >= vc1 && col <= vc2)
-                            || (buf_row == vr1 && buf_row < vr2 && col >= vc1)
-                            || (buf_row == vr2 && buf_row > vr1 && col <= vc2));
-                    let in_search = !self.last_search.is_empty() && {
-                        let byte = self.buf.byte_offset(buf_row, col);
-                        line[byte..].starts_with(&self.last_search)
-                    };
-
-                    let (fg, cell_bg, bold) = if is_cursor {
-                        match self.mode {
-                            Mode::Insert => (crate::theme::DARK_BG, crate::theme::GREEN, false),
-                            Mode::Visual => (crate::theme::DARK_BG, crate::theme::YELLOW, false),
-                            _ => (crate::theme::DARK_BG, crate::theme::FG, true),
-                        }
-                    } else if in_visual {
-                        (crate::theme::BG, crate::theme::MAGENTA, false)
-                    } else if in_search {
-                        (crate::theme::DARK_BG, crate::theme::YELLOW, false)
-                    } else if is_cur {
-                        (crate::theme::FG, line_bg, false)
-                    } else {
-                        (crate::theme::FG, normal_bg, false)
-                    };
-
-                    if let Some(last) = runs.last_mut() {
-                        if last.fg == fg && last.bg == cell_bg && last.bold == bold {
-                            last.text.push(ch);
-                            continue;
-                        }
-                    }
-                    runs.push(Run {
-                        text: ch.to_string(),
-                        fg,
-                        bg: cell_bg,
-                        bold,
-                    });
-                }
-
-                RenderedLine::Text {
-                    line_num: buf_row,
-                    is_current: is_cur,
-                    runs,
-                    bg,
-                }
-            })
-            .collect()
-    }
-}
-
-// A styled run of consecutive chars with identical fg/bg/bold.
-// Using runs instead of per-cell elements cuts element count from O(cols) to O(2-4) per line.
-#[derive(Clone, Debug)]
-struct Run {
-    text: String,
-    fg: Color,
-    bg: Color,
-    bold: bool,
-}
-
-#[derive(Clone, Debug)]
-enum RenderedLine {
-    Tilde,
-    Text {
-        line_num: usize,
-        is_current: bool,
-        runs: Vec<Run>,
-        bg: Color,
-    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

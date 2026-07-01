@@ -1,5 +1,6 @@
 use crate::components::blocks_renderer::BlocksRenderer;
 use crate::document::model::ListItem;
+use crate::theme;
 use iocraft::prelude::*;
 use std::path::PathBuf;
 
@@ -33,7 +34,7 @@ pub fn ListBlock(props: &ListBlockProps, _hooks: Hooks) -> impl Into<AnyElement<
                 element! {
                     View(flex_direction: FlexDirection::Row) {
                         View(width: 4) {
-                            Text(content: format!("{} ", marker), color: crate::theme::YELLOW)
+                            Text(content: format!("{} ", marker), color: theme::YELLOW)
                         }
                         View(flex_grow: 1.0) {
                             BlocksRenderer(

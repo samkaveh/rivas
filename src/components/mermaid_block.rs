@@ -1,3 +1,4 @@
+use crate::theme;
 use iocraft::prelude::*;
 use std::io::Write;
 
@@ -157,7 +158,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     if let Some(err) = error_msg.read().clone() {
         return element! {
             View() {
-                Text(content: err, color: crate::theme::RED)
+                Text(content: err, color: theme::RED)
             }
         }
         .into_any();

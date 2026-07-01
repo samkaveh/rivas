@@ -3689,7 +3689,7 @@ dependencies = [
 
 [[package]]
 name = "rivas"
-version = "0.2.0"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -3713,6 +3713,7 @@ dependencies = [
  "typst",
  "typst-assets",
  "typst-svg",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

@@ -201,21 +201,21 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 on_change,
                 on_quit,
             )
-            View(width: 100pct, height: 1, background_color: crate::theme::STATUS_BG, flex_direction: FlexDirection::Row) {
-                View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " :q ", color: crate::theme::FG)
+            View(width: 100pct, height: 1, background_color: theme::STATUS_BG, flex_direction: FlexDirection::Row) {
+                View(background_color: theme::DARK_GREY) {
+                    Text(content: " :q ", color: theme::FG)
                 }
                 Text(content: " Quit ")
-                View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " C-p ", color: crate::theme::FG)
+                View(background_color: theme::DARK_GREY) {
+                    Text(content: " C-p ", color: theme::FG)
                 }
                 Text(content: " Find ")
-                View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " j/k ", color: crate::theme::FG)
+                View(background_color: theme::DARK_GREY) {
+                    Text(content: " j/k ", color: theme::FG)
                 }
                 Text(content: " Scroll ")
-                View(background_color: crate::theme::DARK_GREY) {
-                    Text(content: " gg/G ", color: crate::theme::FG)
+                View(background_color: theme::DARK_GREY) {
+                    Text(content: " gg/G ", color: theme::FG)
                 }
                 Text(content: " Top/Bottom ")
                 View(flex_grow: 1.0) {}

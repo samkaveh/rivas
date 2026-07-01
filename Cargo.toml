@@ -1,7 +1,17 @@
 [package]
 name = "rivas"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.paackage."*"]
+opt-level = 3
 
 [lib]
 name = "rivas"
@@ -39,3 +49,4 @@ iocraft = "0.8.2"
 skim = "4.7.0"
 smol = "2.0.2"
 selkie-rs = "0.3.0"
+unicode-width = "0.2.2"
