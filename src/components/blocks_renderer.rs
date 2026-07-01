@@ -139,12 +139,15 @@ pub fn BlocksRenderer(
             (None, None, Mode::Normal, false, None)
         };
 
+    let block_counts = props.blocks.len();
     element! {
         View(flex_direction: FlexDirection::Column) {
-            #(props.blocks.iter().map(|block| {
+            #(props.blocks.iter().enumerate().map(|(i, block)| {
                 let span = block.span();
+
                 // is_cursor_here: cursor is on this block (any mode)
-                let is_cursor_here = cursor_offset.map_or(false, |off| off >= span.0 && off <= span.1);
+                let is_last_block = i+1 == block_counts;
+                let is_cursor_here = cursor_offset.map_or(false, |off| { if is_last_block {off >= span.0 && off <= span.1} else {off >= span.0 && off < span.1}});
                 // Only show raw text editing view when cursor is on the block AND
                 // the editor is in an editing mode (Insert/Command/Search).
                 // In Normal mode, blocks stay as their rendered markdown form (view-only).
