@@ -15,7 +15,39 @@ use crate::theme;
 use iocraft::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+// "… rest of the truncated text"
+fn tail_to_width(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in s.chars().rev() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + w > max {
+            out.insert(0, '…');
+            break;
+        }
+        out.insert(0, ch);
+        width += w;
+    }
+    out
+}
+
+// "first part of the truncated text …"
+fn head_to_width(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + w > max {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+        width += w;
+    }
+    out
+}
 
 #[derive(Default, Props)]
 struct ScrollIntoViewContainerProps {
@@ -447,6 +479,22 @@ pub fn BlocksRenderer(
                         let after_str = after.to_string();
                         let cursor_row_col_clone = cursor_row_col.clone();
 
+
+                        let prefix = format!(
+                            "↳ Ln {}, Col {}: ",
+                            cursor_row_col_clone.map(|(r, _)| r + 1).unwrap_or(1),
+                            cursor_row_col_clone.map(|(_, c)| c).unwrap_or(0),
+                        );
+                        let total = vw_clone.unwrap_or(80).saturating_sub(theme::TOTAL_VIEWPORT_OFFSET + 12) as usize;
+                        let budget  = total
+                            .saturating_sub(UnicodeWidthStr::width(prefix.as_str()))
+                            .saturating_sub(1)
+                            .max(8);
+                        let before_keep = budget / 2;
+                        let after_keep = budget - before_keep;
+                        let before_win = tail_to_width(&before_str, before_keep);
+                        let after_win = head_to_width(&after_str, after_keep);
+
                         let factory: Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static> = Arc::new(move || {
                             let rendered = match &block_clone {
                                 Block::Heading { level, content, id: _, .. } => element!{Heading(level: *level, content: content.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
@@ -477,13 +525,12 @@ pub fn BlocksRenderer(
                                         flex_direction: FlexDirection::Row,
                                         background_color: theme::DARK_BG,
                                     ) {
-                                        Text(content: "↳ ", color: theme::BLUE, weight: Weight::Bold)
-                                        Text(content: format!("Ln {}, Col {}: ", cursor_row_col_clone.map(|(r,_)| r + 1).unwrap_or(1), cursor_row_col_clone.map(|(_,c)| c).unwrap_or(0)), color: theme::YELLOW)
-                                        Text(content: before_str.clone(), color: theme::FG)
+                                        Text(content: prefix.clone(), color: theme::YELLOW, weight: Weight::Bold)
+                                        Text(content: before_win.clone(), color: theme::FG)
                                         View(background_color: theme::BLUE) {
                                             Text(content: cursor_char_str.clone(), color: theme::DARK_BG)
                                         }
-                                        Text(content: after_str.clone(), color: theme::FG)
+                                        Text(content: after_win.clone(), color: theme::FG)
                                     }
                                 }
                             }.into_any()

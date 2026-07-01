@@ -1,20 +1,4 @@
 use crate::theme;
-/// iocraft neovim-style modal editor
-///
-/// Rewritten to use the declarative element!/component macro API instead of
-/// raw Component::draw(), since CanvasTextStyle does not carry color/background
-/// — those are View/Text props in the element tree.
-///
-/// Modes:  Normal, Insert, Visual (char), Command, Search
-/// Motions: h j k l  w b e  0 ^ $  gg G  { }  f/t/F/T  ; ,
-/// Operators: d c y  (+ dd cc yy)
-/// Insert: i I a A o O  s S
-/// Visual: v + motions + d/c/y
-/// Command: :w :q :wq :q! :wq! :<n>  ZZ ZQ
-/// Undo/Redo: u  Ctrl-r
-/// Paste: p P
-/// Search: /pat  ?pat  n N
-/// Misc: x X J ~ >> <<  Ctrl-d/u/f/b  PageUp/Down
 use iocraft::prelude::*;
 use std::collections::{HashMap, VecDeque};
 // ─────────────────────────────────────────────────────────────────────────────
