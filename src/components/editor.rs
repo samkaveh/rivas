@@ -257,13 +257,21 @@ impl Buffer {
         for offset in 0..total {
             let row = (start_row + offset) % total;
             let line = self.line(row);
-            let from = if offset == 0 {
-                (start_col + 1).min(line.len())
+            let from_byte = if offset == 0 {
+                let here = self.byte_offset(row, start_col);
+                line[here..]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| here + i)
+                    .unwrap_or(line.len())
             } else {
                 0
             };
-            if let Some(pos) = line[from..].find(pat) {
-                return Some((row, from + pos));
+
+            if let Some(pos) = line[from_byte..].find(pat) {
+                let match_byte = from_byte + pos;
+                let col = line[..match_byte].chars().count();
+                return Some((row, col));
             }
         }
         None
@@ -286,13 +294,15 @@ impl Buffer {
                 total - (offset - start_row)
             };
             let line = self.line(row);
-            let to = if offset == 0 {
-                start_col.min(line.len())
+            let to_byte = if offset == 0 {
+                self.byte_offset(row, start_col)
             } else {
                 line.len()
             };
-            if let Some(pos) = line[..to].rfind(pat) {
-                return Some((row, pos));
+
+            if let Some(pos) = line[..to_byte].rfind(pat) {
+                let col = line[..pos].chars().count();
+                return Some((row, col));
             }
         }
         None
