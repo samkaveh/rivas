@@ -1,4 +1,5 @@
 use crate::theme;
+use arboard::Clipboard;
 use iocraft::prelude::*;
 use std::collections::{HashMap, VecDeque};
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +346,6 @@ pub struct HistoryEntry {
     pub col: usize,
 }
 
-#[derive(Clone)]
 pub struct EditorState {
     pub buf: Buffer,
     pub row: usize,
@@ -369,6 +369,7 @@ pub struct EditorState {
     pub search_forward: bool,
     pub view_height: usize,
     pub view_width: usize,
+    pub clipboard: Option<Clipboard>,
 }
 
 impl EditorState {
@@ -405,6 +406,7 @@ impl EditorState {
             search_forward: true,
             view_height: 20,
             view_width: 80,
+            clipboard: Clipboard::new().ok(),
         }
     }
 
@@ -488,11 +490,31 @@ impl EditorState {
 
     fn yank(&mut self, reg: char, text: String) {
         self.registers.insert(reg, text.clone());
-        self.registers.insert('"', text);
+        self.registers.insert('"', text.clone());
+
+        if reg == '"' {
+            if let Some(cb) = self.clipboard.as_mut() {
+                let _ = cb.set_text(text);
+            }
+        }
+    }
+
+    fn resolve_paste_text(&mut self, reg: char) -> String {
+        if reg == '"' {
+            if let Some(cb) = self.clipboard.as_mut() {
+                if let Ok(text) = cb.get_text() {
+                    if !text.is_empty() {
+                        return text;
+                    }
+                }
+            }
+        }
+
+        self.registers.get(&reg).cloned().unwrap_or_default()
     }
 
     fn paste_after(&mut self, reg: char) {
-        let text = self.registers.get(&reg).cloned().unwrap_or_default();
+        let text = self.resolve_paste_text(reg);
         if text.is_empty() {
             return;
         }
@@ -520,7 +542,7 @@ impl EditorState {
     }
 
     fn paste_before(&mut self, reg: char) {
-        let text = self.registers.get(&reg).cloned().unwrap_or_default();
+        let text = self.resolve_paste_text(reg);
         if text.is_empty() {
             return;
         }
