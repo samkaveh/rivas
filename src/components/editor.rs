@@ -1,4 +1,5 @@
 use crate::theme;
+use arboard::Clipboard;
 use iocraft::prelude::*;
 use std::collections::{HashMap, VecDeque};
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +346,6 @@ pub struct HistoryEntry {
     pub col: usize,
 }
 
-#[derive(Clone)]
 pub struct EditorState {
     pub buf: Buffer,
     pub row: usize,
@@ -369,18 +369,10 @@ pub struct EditorState {
     pub search_forward: bool,
     pub view_height: usize,
     pub view_width: usize,
+    pub clipboard: Option<Clipboard>,
 }
 
 impl EditorState {
-    pub fn absolute_byte_offset_at(&self, row: usize, col: usize) -> usize {
-        let mut offset = 0;
-        for i in 0..row {
-            offset += self.buf.line(i).len() + 1; // +1 for \n
-        }
-        offset += self.buf.byte_offset(row, col);
-        offset
-    }
-
     pub fn new(filename: String, content: &str) -> Self {
         Self {
             buf: Buffer::new(content),
@@ -405,6 +397,7 @@ impl EditorState {
             search_forward: true,
             view_height: 20,
             view_width: 80,
+            clipboard: Clipboard::new().ok(),
         }
     }
 
@@ -477,6 +470,15 @@ impl EditorState {
         offset
     }
 
+    pub fn absolute_byte_offset_at(&self, row: usize, col: usize) -> usize {
+        let mut offset = 0;
+        for i in 0..row {
+            offset += self.buf.line(i).len() + 1; // +1 for \n
+        }
+        offset += self.buf.byte_offset(row, col);
+        offset
+    }
+
     fn scroll_to_cursor(&mut self) {
         if self.row < self.scroll {
             self.scroll = self.row;
@@ -488,11 +490,31 @@ impl EditorState {
 
     fn yank(&mut self, reg: char, text: String) {
         self.registers.insert(reg, text.clone());
-        self.registers.insert('"', text);
+        self.registers.insert('"', text.clone());
+
+        if reg == '"' {
+            if let Some(cb) = self.clipboard.as_mut() {
+                let _ = cb.set_text(text);
+            }
+        }
+    }
+
+    fn resolve_paste_text(&mut self, reg: char) -> String {
+        if reg == '"' {
+            if let Some(cb) = self.clipboard.as_mut() {
+                if let Ok(text) = cb.get_text() {
+                    if !text.is_empty() {
+                        return text;
+                    }
+                }
+            }
+        }
+
+        self.registers.get(&reg).cloned().unwrap_or_default()
     }
 
     fn paste_after(&mut self, reg: char) {
-        let text = self.registers.get(&reg).cloned().unwrap_or_default();
+        let text = self.resolve_paste_text(reg);
         if text.is_empty() {
             return;
         }
@@ -520,7 +542,7 @@ impl EditorState {
     }
 
     fn paste_before(&mut self, reg: char) {
-        let text = self.registers.get(&reg).cloned().unwrap_or_default();
+        let text = self.resolve_paste_text(reg);
         if text.is_empty() {
             return;
         }
@@ -619,7 +641,9 @@ impl EditorState {
         } else {
             (dest.0, dest.1, self.row, self.col)
         };
-        self.push_undo();
+        if op != 'y' {
+            self.push_undo();
+        }
         if r1 == r2 {
             let chars: Vec<char> = self.buf.line(r1).chars().collect();
             let end = (c2 + 1).min(chars.len());
@@ -662,7 +686,9 @@ impl EditorState {
                 }
             }
         }
-        self.modified = true;
+        if op != 'y' {
+            self.modified = true;
+        }
     }
 
     fn delete_lines(&mut self, count: usize, reg: char) {
@@ -1113,7 +1139,9 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
         }
         KeyCode::Char('s') => {
             s.push_undo();
-            s.buf.delete_char(s.row, s.col);
+            if let Some(c) = s.buf.delete_char(s.row, s.col) {
+                s.yank('"', c.to_string());
+            }
             s.mode = Mode::Insert;
             s.modified = true;
             s.count_buf.clear();
@@ -1197,10 +1225,16 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
             s.push_undo();
             let count = s.count();
             s.count_buf.clear();
+            let mut cut = String::new();
             for _ in 0..count {
                 if s.col < s.buf.char_count(s.row) {
-                    s.buf.delete_char(s.row, s.col);
+                    if let Some(c) = s.buf.delete_char(s.row, s.col) {
+                        cut.push(c);
+                    }
                 }
+            }
+            if !cut.is_empty() {
+                s.yank('"', cut);
             }
             s.clamp();
             s.modified = true;
@@ -1209,7 +1243,9 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
             s.push_undo();
             if s.col > 0 {
                 s.col -= 1;
-                s.buf.delete_char(s.row, s.col);
+                if let Some(c) = s.buf.delete_char(s.row, s.col) {
+                    s.yank('"', c.to_string());
+                }
                 s.modified = true;
             }
         }
@@ -1222,12 +1258,18 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
 
         // Paste
         KeyCode::Char('p') => {
-            s.paste_after('"');
+            let count = s.count();
             s.count_buf.clear();
+            for _ in 0..count {
+                s.paste_after('"');
+            }
         }
         KeyCode::Char('P') => {
-            s.paste_before('"');
+            let count = s.count();
             s.count_buf.clear();
+            for _ in 0..count {
+                s.paste_before('"');
+            }
         }
 
         // J ~ >> <<
