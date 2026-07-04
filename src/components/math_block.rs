@@ -179,7 +179,8 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     }
 
     if error_msg.read().is_none() && data_cache.read().is_empty() {
-        match render_math(props.content.as_str(), props.display, 100 * vw, true) {
+        let cell_w = caps_cache.read().clone().unwrap_or_default().cell_w_px.max(1) as u32;
+        match render_math(props.content.as_str(), props.display, (cell_w * 2).max(16) * vw, true) {
             Ok(loaded_image) => {
                 data_cache.set(loaded_image.0);
                 let mut cols_ = loaded_image.1;

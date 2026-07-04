@@ -3,9 +3,11 @@ use std::hash::{Hash, Hasher};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, ImageDecoder, ImageEncoder};
+
+const MAX_GIF_FRAMES: usize = 60;
 
 pub use crate::assets::asset_cache::ImageData;
 use crate::assets::asset_cache::AssetCache;
@@ -103,6 +105,21 @@ fn load_gif_frames(path: &Path, max_width: u32) -> Result<ImageData> {
     let (orig_w, orig_h) = decoder.dimensions();
     let raw_frames = decoder.into_frames().collect_frames()?;
 
+    let total = raw_frames.len();
+
+    // Sample evenly if more than MAX_GIF_FRAMES
+    let selected: Vec<usize> = if total > MAX_GIF_FRAMES {
+        (0..MAX_GIF_FRAMES)
+            .map(|i| (i * total) / MAX_GIF_FRAMES)
+            .collect()
+    } else {
+        (0..total).collect()
+    };
+
+    if selected.is_empty() {
+        bail!("No frames in GIF");
+    }
+
     let ((out_w, out_h), scale) = if orig_w > max_width {
         let s = max_width as f32 / orig_w as f32;
         ((max_width, (orig_h as f32 * s) as u32), s)
@@ -110,11 +127,12 @@ fn load_gif_frames(path: &Path, max_width: u32) -> Result<ImageData> {
         ((orig_w, orig_h), 1.0)
     };
 
-    let mut frames = Vec::new();
-    for frame in raw_frames {
+    let mut frames = Vec::with_capacity(selected.len());
+    for idx in &selected {
+        let frame = &raw_frames[*idx];
         let (numer, denom) = frame.delay().numer_denom_ms();
         let delay_ms = if denom > 0 { numer / denom } else { 0 };
-        let mut rgba = frame.into_buffer();
+        let mut rgba = frame.clone().into_buffer();
 
         if scale != 1.0 {
             rgba = image::imageops::resize(&rgba, out_w, out_h, image::imageops::FilterType::Lanczos3);

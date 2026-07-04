@@ -217,7 +217,8 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
             loading.set(true);
 
             let result_shared = load_result.read().clone();
-            let max_w = (vw as f32 * 100.0).round() as u32;
+            let cell_w = caps_cache.read().clone().unwrap_or_default().cell_w_px.max(1) as f32;
+            let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
             let url = url.clone();
             let base_dir = base_dir.map(|p| p.to_path_buf());
 
