@@ -1,6 +1,9 @@
 use std::sync::OnceLock;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 use crate::assets::svg::rasterize_svg_to_png;
+use crate::assets::asset_cache::AssetCache;
 use anyhow::Result;
 use tylax::latex_to_typst;
 use typst::{
@@ -12,12 +15,25 @@ use typst::{
     utils::LazyHash,
 };
 
+static MATH_CACHE: std::sync::LazyLock<AssetCache> = std::sync::LazyLock::new(AssetCache::new);
+
 pub fn render_math(
     latex: &str,
     display: bool,
     max_width: u32,
     dark_theme: bool,
 ) -> Result<(Vec<u8>, u32, u32)> {
+    let mut hasher = DefaultHasher::new();
+    latex.hash(&mut hasher);
+    display.hash(&mut hasher);
+    max_width.hash(&mut hasher);
+    dark_theme.hash(&mut hasher);
+    let cache_key = hasher.finish();
+
+    if let Some(cached) = MATH_CACHE.get(cache_key) {
+        return Ok(cached);
+    }
+
     let typst_math = latex_to_typst(latex);
 
     let source = build_typst_source(&typst_math, display, dark_theme);
@@ -25,7 +41,9 @@ pub fn render_math(
     let document = compile_typst(&source)?;
 
     let svg = typst_svg::svg(&document.pages[0]);
-    rasterize_svg_to_png(&svg, max_width)
+    let result = rasterize_svg_to_png(&svg, max_width)?;
+    MATH_CACHE.insert(cache_key, result.0.clone(), result.1, result.2);
+    Ok(result)
 }
 
 fn build_typst_source(typst_math: &str, display: bool, dark_theme: bool) -> String {
