@@ -137,50 +137,102 @@ impl Buffer {
 
     pub fn word_forward(&self, row: usize, col: usize) -> (usize, usize) {
         let chars: Vec<char> = self.line(row).chars().collect();
+        if chars.is_empty() {
+            if row + 1 < self.line_count() {
+                return (row + 1, 0);
+            }
+            return (row, 0);
+        }
+
         let mut c = col;
-        while c < chars.len() && is_word(chars[c]) {
+        let start_class = char_class(chars[c]);
+
+        // Move past the current word (characters of the same non-whitespace class)
+        if start_class != CharClass::Whitespace {
+            while c < chars.len() && char_class(chars[c]) == start_class {
+                c += 1;
+            }
+        }
+
+        // Skip trailing whitespace
+        while c < chars.len() && char_class(chars[c]) == CharClass::Whitespace {
             c += 1;
         }
-        while c < chars.len() && chars[c].is_whitespace() {
-            c += 1;
-        }
-        if c >= chars.len() && row + 1 < self.line_count() {
-            (row + 1, 0)
+
+        if c >= chars.len() {
+            if row + 1 < self.line_count() {
+                (row + 1, self.first_non_blank(row + 1))
+            } else {
+                (row, chars.len().saturating_sub(1))
+            }
         } else {
-            (row, c.min(chars.len().saturating_sub(1)))
+            (row, c)
         }
     }
 
     pub fn word_backward(&self, row: usize, col: usize) -> (usize, usize) {
+        if col == 0 {
+            if row > 0 {
+                let prev_row = row - 1;
+                return (prev_row, self.char_count(prev_row).saturating_sub(1));
+            }
+            return (0, 0);
+        }
+
         let chars: Vec<char> = self.line(row).chars().collect();
         let mut c = col as isize - 1;
-        while c >= 0 && chars[c as usize].is_whitespace() {
+
+        // Skip whitespace backward
+        while c >= 0 && char_class(chars[c as usize]) == CharClass::Whitespace {
             c -= 1;
         }
-        while c > 0 && is_word(chars[(c - 1) as usize]) {
-            c -= 1;
-        }
+
         if c < 0 {
             if row > 0 {
-                (row - 1, self.char_count(row - 1).saturating_sub(1))
-            } else {
-                (0, 0)
+                let prev_row = row - 1;
+                return (prev_row, self.char_count(prev_row).saturating_sub(1));
             }
-        } else {
-            (row, c as usize)
+            return (row, 0);
         }
+
+        // Move to the beginning of the word (same non-whitespace class)
+        let target_class = char_class(chars[c as usize]);
+        while c > 0 && char_class(chars[(c - 1) as usize]) == target_class {
+            c -= 1;
+        }
+
+        (row, c as usize)
     }
 
     pub fn word_end(&self, row: usize, col: usize) -> (usize, usize) {
         let chars: Vec<char> = self.line(row).chars().collect();
+        if chars.is_empty() {
+            if row + 1 < self.line_count() {
+                return self.word_end(row + 1, 0);
+            }
+            return (row, 0);
+        }
+
         let mut c = col + 1;
-        while c < chars.len() && chars[c].is_whitespace() {
+        // Skip whitespace to the start of the next word
+        while c < chars.len() && char_class(chars[c]) == CharClass::Whitespace {
             c += 1;
         }
-        while c + 1 < chars.len() && is_word(chars[c + 1]) {
+
+        if c >= chars.len() {
+            if row + 1 < self.line_count() {
+                return self.word_end(row + 1, 0);
+            }
+            return (row, chars.len().saturating_sub(1));
+        }
+
+        // Move to the end of this word (same non-whitespace class)
+        let target_class = char_class(chars[c]);
+        while c + 1 < chars.len() && char_class(chars[c + 1]) == target_class {
             c += 1;
         }
-        (row, c.min(chars.len().saturating_sub(1)))
+
+        (row, c)
     }
 
     pub fn find_forward(
@@ -294,8 +346,28 @@ impl Buffer {
     }
 }
 
-fn is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum CharClass {
+    Word,
+    Punct,
+    Whitespace,
+}
+
+fn char_class(c: char) -> CharClass {
+    if c.is_whitespace() {
+        CharClass::Whitespace
+    } else if c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punct
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionType {
+    Inclusive,
+    Exclusive,
+    Line,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -509,7 +581,6 @@ impl EditorState {
                 }
             }
         }
-
         self.registers.get(&reg).cloned().unwrap_or_default()
     }
 
@@ -518,7 +589,6 @@ impl EditorState {
         if text.is_empty() {
             return;
         }
-        self.push_undo();
         if text.ends_with('\n') {
             let lns: Vec<String> = text
                 .trim_end_matches('\n')
@@ -546,7 +616,6 @@ impl EditorState {
         if text.is_empty() {
             return;
         }
-        self.push_undo();
         if text.ends_with('\n') {
             let lns: Vec<String> = text
                 .trim_end_matches('\n')
@@ -635,7 +704,13 @@ impl EditorState {
         }
     }
 
-    fn execute_operator(&mut self, op: char, dest: (usize, usize), reg: char) {
+    fn execute_operator(
+        &mut self,
+        op: char,
+        dest: (usize, usize),
+        motion_type: MotionType,
+        reg: char,
+    ) {
         let (r1, c1, r2, c2) = if (self.row, self.col) <= dest {
             (self.row, self.col, dest.0, dest.1)
         } else {
@@ -644,9 +719,35 @@ impl EditorState {
         if op != 'y' {
             self.push_undo();
         }
-        if r1 == r2 {
+        if motion_type == MotionType::Line {
+            let mut yanked = String::new();
+            for row in r1..=r2 {
+                yanked.push_str(self.buf.line(row));
+                yanked.push('\n');
+            }
+            self.yank(reg, yanked);
+            if op != 'y' {
+                self.buf.lines.drain(r1..=r2);
+                if self.buf.lines.is_empty() {
+                    self.buf.lines.push(String::new());
+                }
+                self.row = r1.min(self.buf.line_count() - 1);
+                self.col = self.buf.first_non_blank(self.row);
+                if op == 'c' {
+                    self.buf.insert_line(self.row, String::new());
+                    self.col = 0;
+                    self.mode = Mode::Insert;
+                } else {
+                    self.clamp();
+                }
+            }
+        } else if r1 == r2 {
             let chars: Vec<char> = self.buf.line(r1).chars().collect();
-            let end = (c2 + 1).min(chars.len());
+            let end = if motion_type == MotionType::Exclusive {
+                c2.min(chars.len())
+            } else {
+                (c2 + 1).min(chars.len())
+            };
             let yanked: String = chars[c1..end].iter().collect();
             self.yank(reg, yanked);
             if op != 'y' {
@@ -665,19 +766,29 @@ impl EditorState {
                 yanked.push_str(self.buf.line(row));
                 yanked.push('\n');
             }
+            let end_c2 = if motion_type == MotionType::Exclusive {
+                c2
+            } else {
+                c2 + 1
+            };
             let t_byte = self
                 .buf
-                .byte_offset(r2, (c2 + 1).min(self.buf.char_count(r2)));
+                .byte_offset(r2, end_c2.min(self.buf.char_count(r2)));
             yanked.push_str(&self.buf.line(r2)[..t_byte]);
             self.yank(reg, yanked);
             if op != 'y' {
                 let tail = self.buf.line(r2)[t_byte..].to_string();
                 let h_byte2 = self.buf.byte_offset(r1, c1);
                 let head = self.buf.line(r1)[..h_byte2].to_string();
-                for _ in r1..=r2 {
-                    self.buf.delete_line(r1);
+
+                self.buf.lines.drain(r1..=r2);
+                let merged_line = format!("{}{}", head, tail);
+                if self.buf.lines.is_empty() {
+                    self.buf.lines.push(merged_line);
+                } else {
+                    self.buf.lines.insert(r1, merged_line);
                 }
-                self.buf.insert_line(r1, format!("{}{}", head, tail));
+
                 self.row = r1;
                 self.col = c1;
                 self.clamp();
@@ -788,11 +899,13 @@ fn handle_insert(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
             s.mode = Mode::Normal;
             s.col = s.col.saturating_sub(1);
             s.clamp();
+            s.col_want = s.col;
         }
         KeyCode::Char('c') if ctrl => {
             s.mode = Mode::Normal;
             s.col = s.col.saturating_sub(1);
             s.clamp();
+            s.col_want = s.col;
         }
         KeyCode::Char(c) if !ctrl => {
             s.buf.insert_char(s.row, s.col, c);
@@ -936,17 +1049,17 @@ fn handle_visual(s: &mut EditorState, code: KeyCode) -> bool {
         }
         KeyCode::Char('d') | KeyCode::Char('x') => {
             let d = s.visual_start;
-            s.execute_operator('d', d, '"');
+            s.execute_operator('d', d, MotionType::Inclusive, '"');
             s.mode = Mode::Normal;
         }
         KeyCode::Char('y') => {
             let d = s.visual_start;
-            s.execute_operator('y', d, '"');
+            s.execute_operator('y', d, MotionType::Inclusive, '"');
             s.mode = Mode::Normal;
         }
         KeyCode::Char('c') => {
             let d = s.visual_start;
-            s.execute_operator('c', d, '"');
+            s.execute_operator('c', d, MotionType::Inclusive, '"');
         }
         key => {
             if let Some(dest) = motion_from_key(s, key) {
@@ -1020,7 +1133,7 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
                 if code == KeyCode::Char('g') {
                     let dest = (0, s.buf.first_non_blank(0));
                     if let Some(op) = s.operator.take() {
-                        s.execute_operator(op, dest, '"');
+                        s.execute_operator(op, dest, MotionType::Line, '"');
                     } else {
                         s.row = dest.0;
                         s.col = dest.1;
@@ -1057,7 +1170,7 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
                     s.last_find = Some((target, backward));
                     if let Some(dest) = s.apply_motion(m, Some(target)) {
                         if let Some(op) = s.operator.take() {
-                            s.execute_operator(op, dest, '"');
+                            s.execute_operator(op, dest, MotionType::Inclusive, '"');
                         } else {
                             s.row = dest.0;
                             s.col = dest.1;
@@ -1078,11 +1191,11 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
 
     match code {
         // Count digits
-        KeyCode::Char(d @ '1'..='9') if s.operator.is_none() && s.count_buf.len() < 8 => {
+        KeyCode::Char(d @ '1'..='9') if s.count_buf.len() < 8 => {
             s.count_buf.push(d);
             return false;
         }
-        KeyCode::Char('0') if !s.count_buf.is_empty() && s.operator.is_none() => {
+        KeyCode::Char('0') if !s.count_buf.is_empty() => {
             s.count_buf.push('0');
             return false;
         }
@@ -1207,6 +1320,15 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
                     'y' => s.yank_lines(count, '"'),
                     'c' => {
                         s.push_undo();
+                        s.yank_lines(count, '"');
+                        for _ in 1..count {
+                            if s.row + 1 < s.buf.line_count() {
+                                s.buf.delete_line(s.row + 1);
+                            } else if s.row > 0 {
+                                s.buf.delete_line(s.row);
+                                s.row -= 1;
+                            }
+                        }
                         s.buf.lines[s.row].clear();
                         s.col = 0;
                         s.mode = Mode::Insert;
@@ -1260,6 +1382,7 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
         KeyCode::Char('p') => {
             let count = s.count();
             s.count_buf.clear();
+            s.push_undo();
             for _ in 0..count {
                 s.paste_after('"');
             }
@@ -1267,6 +1390,7 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
         KeyCode::Char('P') => {
             let count = s.count();
             s.count_buf.clear();
+            s.push_undo();
             for _ in 0..count {
                 s.paste_before('"');
             }
@@ -1275,11 +1399,19 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
         // J ~ >> <<
         KeyCode::Char('J') => {
             s.push_undo();
-            let c = s.count().max(1);
+            let c = s.count().saturating_sub(1).max(1);
             s.count_buf.clear();
             for _ in 0..c {
                 if s.row + 1 < s.buf.line_count() {
-                    s.buf.join_lines(s.row);
+                    let next = s.buf.lines.remove(s.row + 1);
+                    let trimmed_next = next.trim_start();
+                    if !s.buf.lines[s.row].is_empty()
+                        && !s.buf.lines[s.row].ends_with(' ')
+                        && !trimmed_next.is_empty()
+                    {
+                        s.buf.lines[s.row].push(' ');
+                    }
+                    s.buf.lines[s.row].push_str(trimmed_next);
                 }
             }
             s.modified = true;
@@ -1371,7 +1503,7 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
         KeyCode::Char('G') => {
             if let Some(dest) = s.apply_motion('G', None) {
                 if let Some(op) = s.operator.take() {
-                    s.execute_operator(op, dest, '"');
+                    s.execute_operator(op, dest, MotionType::Line, '"');
                 } else {
                     s.row = dest.0;
                     s.col = dest.1;
@@ -1386,7 +1518,7 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
             s.count_buf.clear();
             if let Some(op) = s.operator.take() {
                 let dest = ((s.row + count).min(s.buf.line_count() - 1), s.col);
-                s.execute_operator(op, dest, '"');
+                s.execute_operator(op, dest, MotionType::Line, '"');
             } else {
                 for _ in 0..count {
                     if s.row + 1 < s.buf.line_count() {
@@ -1401,7 +1533,7 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
             s.count_buf.clear();
             if let Some(op) = s.operator.take() {
                 let dest = (s.row.saturating_sub(count), s.col);
-                s.execute_operator(op, dest, '"');
+                s.execute_operator(op, dest, MotionType::Line, '"');
             } else {
                 for _ in 0..count {
                     if s.row > 0 {
@@ -1433,7 +1565,12 @@ fn handle_normal(s: &mut EditorState, code: KeyCode, ctrl: bool) -> bool {
             };
             if let Some(dest) = s.apply_motion(ch, None) {
                 if let Some(op) = s.operator.take() {
-                    s.execute_operator(op, dest, '"');
+                    let motion_type = match ch {
+                        '$' | 'e' => MotionType::Inclusive,
+                        '{' | '}' => MotionType::Line,
+                        _ => MotionType::Exclusive,
+                    };
+                    s.execute_operator(op, dest, motion_type, '"');
                 } else {
                     s.row = dest.0;
                     s.col = dest.1;
@@ -1858,7 +1995,10 @@ mod tests {
         key(&mut s, 'j');
         // In vim, $ sets sticky column to infinity, so j goes to end of "hi"
         assert_eq!(s.row, 1);
-        assert_eq!(s.col, 1, "After $+j, cursor should be at end of shorter line");
+        assert_eq!(
+            s.col, 1,
+            "After $+j, cursor should be at end of shorter line"
+        );
     }
 
     #[test]
@@ -2165,7 +2305,10 @@ mod tests {
         esc(&mut s);
         // col should be 2 (moved left), col_want should also be 2
         assert_eq!(s.col, 2);
-        assert_eq!(s.col_want, 2, "col_want should be updated when exiting insert mode");
+        assert_eq!(
+            s.col_want, 2,
+            "col_want should be updated when exiting insert mode"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -2339,7 +2482,11 @@ mod tests {
         // In vim, 3cc clears lines 0,1,2 and leaves cursor on a blank line
         // The buffer should have only "ddd" remaining plus the blank line
         assert_eq!(s.buf.line(0), "", "cc with count should clear current line");
-        assert_eq!(s.buf.line_count(), 2, "3cc should remove 3 lines, leaving 2 (blank + ddd)");
+        assert_eq!(
+            s.buf.line_count(),
+            2,
+            "3cc should remove 3 lines, leaving 2 (blank + ddd)"
+        );
     }
 
     #[test]
@@ -2432,7 +2579,11 @@ mod tests {
         // After first paste: "hxello", after second: "hxxello", after third: "hxxxello"
         // Now undo once should revert ALL three pastes
         key(&mut s, 'u');
-        assert_eq!(s.buf.line(0), "hello", "Single undo should revert all 3 pastes from 3p");
+        assert_eq!(
+            s.buf.line(0),
+            "hello",
+            "Single undo should revert all 3 pastes from 3p"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -2614,7 +2765,11 @@ mod tests {
         key(&mut s, 'J');
         // KNOWN BUG: J doesn't add space
         // Vim joins with a space: "hello world"
-        assert_eq!(s.buf.line(0), "hello world", "J should add a space when joining lines");
+        assert_eq!(
+            s.buf.line(0),
+            "hello world",
+            "J should add a space when joining lines"
+        );
     }
 
     #[test]
@@ -2622,7 +2777,11 @@ mod tests {
         let mut s = ed("hello\n    world");
         key(&mut s, 'J');
         // Vim strips leading whitespace from next line and adds a single space
-        assert_eq!(s.buf.line(0), "hello world", "J should strip leading whitespace from joined line");
+        assert_eq!(
+            s.buf.line(0),
+            "hello world",
+            "J should strip leading whitespace from joined line"
+        );
     }
 
     #[test]
@@ -2982,7 +3141,11 @@ mod tests {
         keys(&mut s, "$");
         key(&mut s, 'd');
         // Should result in a single empty line (empty buffer)
-        assert_eq!(s.buf.line_count(), 1, "Deleting all content should leave exactly 1 empty line");
+        assert_eq!(
+            s.buf.line_count(),
+            1,
+            "Deleting all content should leave exactly 1 empty line"
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -3191,7 +3354,7 @@ mod tests {
         s.col = 6;
         s.col_want = 6;
         keys(&mut s, "db");
-        assert_eq!(s.buf.line(0), "helloworld");
+        assert_eq!(s.buf.line(0), "world");
     }
 
     // ═════════════════════════════════════════════════════════════════════
