@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::assets::asset_cache::AssetCache;
+use crate::assets::asset_cache::{AssetCache, ImageData};
 use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
 use selkie::{RenderConfig, parse, render_with_config};
@@ -14,8 +14,8 @@ pub fn render_mermaid_to_png(source: &str, max_width: u32) -> Result<(Vec<u8>, u
     max_width.hash(&mut hasher);
     let cache_key = hasher.finish();
 
-    if let Some(cached) = MERMAID_CACHE.get(cache_key) {
-        return Ok(cached);
+    if let Some(ImageData::Png(data, w, h)) = MERMAID_CACHE.get(cache_key) {
+        return Ok((data, w, h));
     }
 
     let mut render_config = RenderConfig::default();
@@ -36,6 +36,6 @@ pub fn render_mermaid_to_png(source: &str, max_width: u32) -> Result<(Vec<u8>, u
     }
 
     let result = rasterize_svg_to_png(&svg, max_width)?;
-    MERMAID_CACHE.insert(cache_key, result.0.clone(), result.1, result.2);
+    MERMAID_CACHE.insert(cache_key, ImageData::Png(result.0.clone(), result.1, result.2));
     Ok(result)
 }
