@@ -1,3 +1,4 @@
+pub mod asset_cache;
 pub mod images;
 pub mod math;
 pub mod mermaid;

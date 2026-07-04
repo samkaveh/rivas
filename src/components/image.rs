@@ -135,7 +135,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     );
 
     if let Some(r) = rect {
-        let mut pos = (r.left, r.top);
+        let pos = (r.left, r.top);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 

@@ -1,19 +1,23 @@
+use std::sync::OnceLock;
+
 use anyhow::Result;
 use resvg::usvg;
 
+static SVG_OPTS: OnceLock<usvg::Options<'static>> = OnceLock::new();
+
+fn svg_opts() -> &'static usvg::Options<'static> {
+    SVG_OPTS.get_or_init(|| {
+        let mut opt = usvg::Options::default();
+        opt.fontdb_mut()
+            .load_font_data(include_bytes!("../assets/fonts/DejaVuSans.ttf").to_vec());
+        opt.font_family = "DejaVu Sans".to_string();
+        opt
+    })
+}
+
 pub fn rasterize_svg_to_png(svg: &str, max_width: u32) -> Result<(Vec<u8>, u32, u32)> {
-    let mut opt = usvg::Options::default();
-
-    // Embed font at compile time
-    let font_data = include_bytes!("../assets/fonts/DejaVuSans.ttf");
-
-    // Load into usvg font database
-    opt.fontdb_mut().load_font_data(font_data.to_vec());
-
-    // Set fallback
-    opt.font_family = "DejaVu Sans".to_string();
-
-    let tree = usvg::Tree::from_str(svg, &opt)?;
+    let opt = svg_opts();
+    let tree = usvg::Tree::from_str(svg, opt)?;
     let size = tree.size();
     let scale = (max_width as f32 / size.width()).min(1.0);
     let w = (size.width() * scale).ceil() as u32;

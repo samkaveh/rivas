@@ -1,7 +1,13 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use image::ImageEncoder;
+
+use crate::assets::asset_cache::AssetCache;
+
+static IMAGE_CACHE: std::sync::LazyLock<AssetCache> = std::sync::LazyLock::new(AssetCache::new);
 
 pub fn resolve_path(url: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
     if url.starts_with("http://") || url.starts_with("https://") {
@@ -39,6 +45,21 @@ pub fn load_image_to_png(
     max_width: u32,
 ) -> Result<(Vec<u8>, u32, u32)> {
     let path = resolve_path(url, base_dir)?;
+
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    max_width.hash(&mut hasher);
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if let Ok(mtime) = meta.modified() {
+            mtime.hash(&mut hasher);
+        }
+    }
+    let cache_key = hasher.finish();
+
+    if let Some(cached) = IMAGE_CACHE.get(cache_key) {
+        return Ok(cached);
+    }
+
     let img = image::open(&path)?.to_rgba8();
 
     let img = if img.width() > max_width {
@@ -59,5 +80,6 @@ pub fn load_image_to_png(
     let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
     encoder.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgba8)?;
 
+    IMAGE_CACHE.insert(cache_key, png_buf.clone(), w, h);
     Ok((png_buf, w, h))
 }

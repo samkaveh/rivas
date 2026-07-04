@@ -1,8 +1,23 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use crate::assets::asset_cache::AssetCache;
 use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
 use selkie::{RenderConfig, parse, render_with_config};
 
+static MERMAID_CACHE: std::sync::LazyLock<AssetCache> = std::sync::LazyLock::new(AssetCache::new);
+
 pub fn render_mermaid_to_png(source: &str, max_width: u32) -> Result<(Vec<u8>, u32, u32)> {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    max_width.hash(&mut hasher);
+    let cache_key = hasher.finish();
+
+    if let Some(cached) = MERMAID_CACHE.get(cache_key) {
+        return Ok(cached);
+    }
+
     let mut render_config = RenderConfig::default();
     render_config.theme.font_family = "DejaVu Sans".to_string();
     let diagram = parse(source)?;
@@ -20,5 +35,7 @@ pub fn render_mermaid_to_png(source: &str, max_width: u32) -> Result<(Vec<u8>, u
         svg.insert_str(svg_start + pos + 1, style_override);
     }
 
-    rasterize_svg_to_png(&svg, max_width)
+    let result = rasterize_svg_to_png(&svg, max_width)?;
+    MERMAID_CACHE.insert(cache_key, result.0.clone(), result.1, result.2);
+    Ok(result)
 }

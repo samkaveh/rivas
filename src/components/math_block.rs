@@ -122,7 +122,7 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     );
 
     if let Some(r) = rect {
-        let mut pos = (r.left, r.top);
+        let pos = (r.left, r.top);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
