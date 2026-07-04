@@ -94,7 +94,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
 
     hooks.use_terminal_events({
         let mut scroll_handle = scroll_handle;
-        let content = current_content.clone();
+        let _content = current_content.clone();
         let cursor_offset = props.cursor_offset.clone();
         let mut editor_state = editor_state.clone();
         let mut tick = tick.clone();

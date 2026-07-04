@@ -1,9 +1,9 @@
-use std::sync::OnceLock;
-use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 
-use crate::assets::svg::rasterize_svg_to_png;
 use crate::assets::asset_cache::AssetCache;
+use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
 use tylax::latex_to_typst;
 use typst::{

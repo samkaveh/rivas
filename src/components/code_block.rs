@@ -204,10 +204,16 @@ fn main() {
         let after = start.elapsed();
 
         eprintln!("=== First render (cache miss) benchmark ===");
-        eprintln!("  Before (no cache): {:?} ({:.1} μs/iter)", before,
-            before.as_nanos() as f64 / iterations as f64 / 1000.0);
-        eprintln!("  After (cache miss): {:?} ({:.1} μs/iter)", after,
-            after.as_nanos() as f64 / iterations as f64 / 1000.0);
+        eprintln!(
+            "  Before (no cache): {:?} ({:.1} μs/iter)",
+            before,
+            before.as_nanos() as f64 / iterations as f64 / 1000.0
+        );
+        eprintln!(
+            "  After (cache miss): {:?} ({:.1} μs/iter)",
+            after,
+            after.as_nanos() as f64 / iterations as f64 / 1000.0
+        );
         eprintln!(
             "  Overhead: {:.1}%",
             (after.as_nanos() as f64 / before.as_nanos() as f64 - 1.0) * 100.0
@@ -247,13 +253,24 @@ fn main() {
         let after = start.elapsed();
 
         eprintln!("\n=== Scrolling re-render benchmark ===");
-        eprintln!("  Document: {} code blocks, {} scroll events", n_blocks, rerenders);
-        eprintln!("  Before (no cache): {:?} ({:.1} ms/scroll)",
-            before, before.as_nanos() as f64 / rerenders as f64 / 1_000_000.0);
-        eprintln!("  After (cache hit):  {:?} ({:.1} ms/scroll)",
-            after, after.as_nanos() as f64 / rerenders as f64 / 1_000_000.0);
-        eprintln!("  Speedup: {:.0}x",
-            before.as_nanos() as f64 / after.as_nanos() as f64);
+        eprintln!(
+            "  Document: {} code blocks, {} scroll events",
+            n_blocks, rerenders
+        );
+        eprintln!(
+            "  Before (no cache): {:?} ({:.1} ms/scroll)",
+            before,
+            before.as_nanos() as f64 / rerenders as f64 / 1_000_000.0
+        );
+        eprintln!(
+            "  After (cache hit):  {:?} ({:.1} ms/scroll)",
+            after,
+            after.as_nanos() as f64 / rerenders as f64 / 1_000_000.0
+        );
+        eprintln!(
+            "  Speedup: {:.0}x",
+            before.as_nanos() as f64 / after.as_nanos() as f64
+        );
     }
 
     /// Benchmark: overhead of hash computation alone per code block
@@ -270,9 +287,12 @@ fn main() {
         let duration = start.elapsed();
 
         eprintln!("\n=== Hash computation overhead ===");
-        eprintln!("  {} iterations: {:?} ({:.1} ns per hash)",
-            iterations, duration,
-            duration.as_nanos() as f64 / iterations as f64);
+        eprintln!(
+            "  {} iterations: {:?} ({:.1} ns per hash)",
+            iterations,
+            duration,
+            duration.as_nanos() as f64 / iterations as f64
+        );
     }
 
     /// Benchmark: full document render (like editor_explanation.md)
@@ -290,7 +310,7 @@ fn main() {
         ]
         .into_iter()
         .chain(vec![(code_medium, Some("rust")); 20].into_iter()) // 20 medium
-        .chain(vec![(code_large, Some("rust")); 5].into_iter())   // 5 large
+        .chain(vec![(code_large, Some("rust")); 5].into_iter()) // 5 large
         .collect();
 
         let n_blocks = blocks.len();
@@ -320,13 +340,23 @@ fn main() {
         }
         let after = start.elapsed();
 
-        eprintln!("\n=== Full document scroll benchmark ({} blocks, {} scrolls) ===",
-            n_blocks, rerenders);
-        eprintln!("  Before (no cache): {:?} ({:.1} ms/scroll)",
-            before, before.as_nanos() as f64 / rerenders as f64 / 1_000_000.0);
-        eprintln!("  After (cache hit):  {:?} ({:.1} ms/scroll)",
-            after, after.as_nanos() as f64 / rerenders as f64 / 1_000_000.0);
-        eprintln!("  Speedup: {:.0}x",
-            before.as_nanos() as f64 / after.as_nanos() as f64);
+        eprintln!(
+            "\n=== Full document scroll benchmark ({} blocks, {} scrolls) ===",
+            n_blocks, rerenders
+        );
+        eprintln!(
+            "  Before (no cache): {:?} ({:.1} ms/scroll)",
+            before,
+            before.as_nanos() as f64 / rerenders as f64 / 1_000_000.0
+        );
+        eprintln!(
+            "  After (cache hit):  {:?} ({:.1} ms/scroll)",
+            after,
+            after.as_nanos() as f64 / rerenders as f64 / 1_000_000.0
+        );
+        eprintln!(
+            "  Speedup: {:.0}x",
+            before.as_nanos() as f64 / after.as_nanos() as f64
+        );
     }
 }

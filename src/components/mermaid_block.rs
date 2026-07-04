@@ -124,7 +124,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     );
 
     if let Some(r) = rect {
-        let mut pos = (r.left, r.top);
+        let pos = (r.left, r.top);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
