@@ -43,7 +43,18 @@ enum MermaidCmd {
         cell_w: u32,
         cell_h: u32,
     },
-    Clear(u32),
+    Place {
+        id: u32,
+        x: i32,
+        y: i32,
+        vis_cols: i32,
+        vis_rows: i32,
+        src_y_offset: i32,
+        cell_w: u32,
+        cell_h: u32,
+    },
+    Detach(u32),
+    Free(u32),
 }
 
 #[component]
@@ -57,6 +68,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     let mut cols = hooks.use_ref(|| 0u32);
     let mut rows = hooks.use_ref(|| 0u32);
     let mut error_msg = hooks.use_state(|| None::<String>);
+    let mut transmitted = hooks.use_ref(|| false);
     let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
     let io_tx = hooks.use_ref(|| {
         let (tx, rx) = mpsc::channel::<MermaidCmd>();
@@ -87,9 +99,10 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
                         write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
 
                         if last_id != 0 {
-                            kitty::delete_by_id(&mut stdout, last_id);
+                            kitty::delete_image(&mut stdout, last_id);
                         }
 
+                        // a=T auto-places at cursor — placement is tracked by id
                         kitty::write_to_cropped(
                             &mut stdout, id, &data,
                             vis_cols as u32, vis_rows as u32,
@@ -101,9 +114,45 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
                     }
-                    MermaidCmd::Clear(id) => {
+                    MermaidCmd::Place {
+                        id,
+                        x,
+                        y,
+                        vis_cols,
+                        vis_rows,
+                        src_y_offset,
+                        cell_w,
+                        cell_h,
+                    } => {
+                        let src_y_px = src_y_offset as u32 * cell_h;
+                        let crop_h_px = vis_rows as u32 * cell_h;
+                        let crop_w_px = vis_cols as u32 * cell_w;
+
+                        write!(stdout, "\x1b7").unwrap();
+                        write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
+
+                        // Delete old placement (keep data cached)
+                        kitty::delete_placements(&mut stdout, id);
+
+                        // Create fresh placement at cursor (no retransmission)
+                        kitty::place_image(
+                            &mut stdout, id,
+                            vis_cols as u32, vis_rows as u32,
+                            0, src_y_px, crop_w_px, crop_h_px,
+                        );
+
+                        write!(stdout, "\x1b8").unwrap();
+                        stdout.flush().unwrap();
+                    }
+                    MermaidCmd::Detach(id) => {
                         if id != 0 {
-                            kitty::delete_by_id(&mut stdout, id);
+                            kitty::delete_placements(&mut stdout, id);
+                            stdout.flush().unwrap();
+                        }
+                    }
+                    MermaidCmd::Free(id) => {
+                        if id != 0 {
+                            kitty::delete_image(&mut stdout, id);
                             stdout.flush().unwrap();
                             last_id = 0;
                         }
@@ -122,6 +171,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
     if *cache_key.read() != key {
         cache_key.set(key);
+        transmitted.set(false);
         data_cache.set(Vec::new());
         cols.set(0);
         rows.set(0);
@@ -173,28 +223,47 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
             let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
 
             if visible && !data_cache.read().is_empty() {
-                let data = data_cache.read().clone();
-                let id = kitty::next_placement_id();
-                image_id.write().set_id(id);
+                let id = if *transmitted.read() {
+                    image_id.read().id()
+                } else {
+                    let new_id = kitty::next_placement_id();
+                    image_id.write().set_id(new_id);
+                    new_id
+                };
+
                 if let Some(ref tx) = *io_tx.read() {
-                    let _ = tx.send(MermaidCmd::Render {
-                        id,
-                        data,
-                        x,
-                        y: render_y,
-                        vis_cols: visible_cols,
-                        vis_rows: actual_vis_rows,
-                        src_y_offset: top_clip_rows,
-                        cell_w: caps.cell_w_px as u32,
-                        cell_h: caps.cell_h_px as u32,
-                    });
+                    if !*transmitted.read() {
+                        let data = data_cache.read().clone();
+                        let _ = tx.send(MermaidCmd::Render {
+                            id,
+                            data,
+                            x,
+                            y: render_y,
+                            vis_cols: visible_cols,
+                            vis_rows: actual_vis_rows,
+                            src_y_offset: top_clip_rows,
+                            cell_w: caps.cell_w_px as u32,
+                            cell_h: caps.cell_h_px as u32,
+                        });
+                        transmitted.set(true);
+                    } else {
+                        let _ = tx.send(MermaidCmd::Place {
+                            id,
+                            x,
+                            y: render_y,
+                            vis_cols: visible_cols,
+                            vis_rows: actual_vis_rows,
+                            src_y_offset: top_clip_rows,
+                            cell_w: caps.cell_w_px as u32,
+                            cell_h: caps.cell_h_px as u32,
+                        });
+                    }
                 }
-            } else if !visible {
+            } else if !visible && *transmitted.read() {
                 let id = image_id.read().id();
                 if id != 0 {
-                    image_id.write().set_id(0);
                     if let Some(ref tx) = *io_tx.read() {
-                        let _ = tx.send(MermaidCmd::Clear(id));
+                        let _ = tx.send(MermaidCmd::Detach(id));
                     }
                 }
             }

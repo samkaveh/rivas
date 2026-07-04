@@ -146,12 +146,11 @@ pub fn delete_all<W: Write>(w: &mut W) {
 }
 
 /// Place an already-transmitted image at the cursor position without retransmitting data.
-/// `placement_id` is the `p` key — if another placement with the same image+placement IDs
-/// exists, it is replaced (moved/resized) instead of creating a new one.
+/// Each call creates a fresh placement — no placement ID is used so the placement is
+/// always positioned at the current cursor when the escape code is emitted.
 pub fn place_image<W: Write>(
     w: &mut W,
     id: u32,
-    placement_id: u32,
     cols: u32,
     rows: u32,
     src_x: u32,
@@ -162,8 +161,8 @@ pub fn place_image<W: Write>(
     let crop = crop_string(src_x, src_y, src_w, src_h);
     write!(
         w,
-        "\x1b_Ga=p,i={},p={},c={},r={}{},q=2;\x1b\\",
-        id, placement_id, cols, rows, crop
+        "\x1b_Ga=p,i={},c={},r={}{},q=2;\x1b\\",
+        id, cols, rows, crop
     )
     .unwrap();
 }

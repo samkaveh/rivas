@@ -24,7 +24,18 @@ enum IoCmd {
         cell_w: u32,
         cell_h: u32,
     },
-    Clear(u32),
+    Place {
+        id: u32,
+        x: i32,
+        y: i32,
+        vis_cols: i32,
+        vis_rows: i32,
+        src_y_offset: i32,
+        cell_w: u32,
+        cell_h: u32,
+    },
+    Detach(u32),
+    Free(u32),
 }
 
 #[derive(Default, Props)]
@@ -73,6 +84,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let mut error_msg = hooks.use_state(|| None::<String>);
     let mut loading = hooks.use_ref(|| false);
     let mut load_result = hooks.use_ref(|| Arc::new(Mutex::new(None::<Result<(String, Vec<(String, u32)>, u32, u32), String>>)));
+    let mut transmitted = hooks.use_ref(|| false);
     let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
     let io_tx = hooks.use_ref(|| {
         let (tx, rx) = mpsc::channel::<IoCmd>();
@@ -107,9 +119,10 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                         write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
 
                         if last_id != 0 {
-                            kitty::delete_by_id(&mut stdout, last_id);
+                            kitty::delete_image(&mut stdout, last_id);
                         }
 
+                        // a=T auto-places at cursor — placement is tracked by id
                         kitty::write_to_cropped_encoded(
                             &mut stdout, id, data.as_str(),
                             vis_cols as u32, vis_rows as u32,
@@ -131,9 +144,45 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
                     }
-                    IoCmd::Clear(id) => {
+                    IoCmd::Place {
+                        id,
+                        x,
+                        y,
+                        vis_cols,
+                        vis_rows,
+                        src_y_offset,
+                        cell_w,
+                        cell_h,
+                    } => {
+                        let src_y_px = src_y_offset as u32 * cell_h;
+                        let crop_h_px = vis_rows as u32 * cell_h;
+                        let crop_w_px = vis_cols as u32 * cell_w;
+
+                        write!(stdout, "\x1b7").unwrap();
+                        write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
+
+                        // Delete old placement (keep data cached)
+                        kitty::delete_placements(&mut stdout, id);
+
+                        // Create fresh placement at cursor (no retransmission)
+                        kitty::place_image(
+                            &mut stdout, id,
+                            vis_cols as u32, vis_rows as u32,
+                            0, src_y_px, crop_w_px, crop_h_px,
+                        );
+
+                        write!(stdout, "\x1b8").unwrap();
+                        stdout.flush().unwrap();
+                    }
+                    IoCmd::Detach(id) => {
                         if id != 0 {
-                            kitty::delete_by_id(&mut stdout, id);
+                            kitty::delete_placements(&mut stdout, id);
+                            stdout.flush().unwrap();
+                        }
+                    }
+                    IoCmd::Free(id) => {
+                        if id != 0 {
+                            kitty::delete_image(&mut stdout, id);
                             stdout.flush().unwrap();
                             last_id = 0;
                         }
@@ -159,6 +208,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         drawn_at.set((-1, -1));
         error_msg.set(None);
         loading.set(false);
+        transmitted.set(false);
         load_result.set(Arc::new(Mutex::new(None)));
     }
 
@@ -255,30 +305,49 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
             let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
 
             if visible && !data_cache.read().is_empty() {
-                let data = Arc::clone(&data_cache.read());
-                let frames = frames_cache.read().clone();
-                let id = kitty::next_placement_id();
-                image_id.write().set_id(id);
+                let id = if *transmitted.read() {
+                    image_id.read().id()
+                } else {
+                    let new_id = kitty::next_placement_id();
+                    image_id.write().set_id(new_id);
+                    new_id
+                };
+
                 if let Some(ref tx) = *io_tx.read() {
-                    let _ = tx.send(IoCmd::Render {
-                        id,
-                        data,
-                        frames,
-                        x,
-                        y: render_y,
-                        vis_cols: visible_cols,
-                        vis_rows: actual_vis_rows,
-                        src_y_offset: top_clip_rows,
-                        cell_w: caps.cell_w_px as u32,
-                        cell_h: caps.cell_h_px as u32,
-                    });
+                    if !*transmitted.read() {
+                        let data = Arc::clone(&data_cache.read());
+                        let frames = frames_cache.read().clone();
+                        let _ = tx.send(IoCmd::Render {
+                            id,
+                            data,
+                            frames,
+                            x,
+                            y: render_y,
+                            vis_cols: visible_cols,
+                            vis_rows: actual_vis_rows,
+                            src_y_offset: top_clip_rows,
+                            cell_w: caps.cell_w_px as u32,
+                            cell_h: caps.cell_h_px as u32,
+                        });
+                        transmitted.set(true);
+                    } else {
+                        let _ = tx.send(IoCmd::Place {
+                            id,
+                            x,
+                            y: render_y,
+                            vis_cols: visible_cols,
+                            vis_rows: actual_vis_rows,
+                            src_y_offset: top_clip_rows,
+                            cell_w: caps.cell_w_px as u32,
+                            cell_h: caps.cell_h_px as u32,
+                        });
+                    }
                 }
-            } else if !visible {
+            } else if !visible && *transmitted.read() {
                 let id = image_id.read().id();
                 if id != 0 {
-                    image_id.write().set_id(0);
                     if let Some(ref tx) = *io_tx.read() {
-                        let _ = tx.send(IoCmd::Clear(id));
+                        let _ = tx.send(IoCmd::Detach(id));
                     }
                 }
             }
