@@ -16,105 +16,158 @@ pub fn is_supported() -> bool {
     false
 }
 
-pub fn write_to<W: Write>(w: &mut W, png_data: &[u8], cols: u32, rows: u32) -> u32 {
-    let id = next_placement_id();
-    write_with_id_to(w, png_data, cols, rows, id);
-    id
-}
-
 static NEXT_PLACEMENT_ID: AtomicU32 = AtomicU32::new(1);
 
 pub fn next_placement_id() -> u32 {
     NEXT_PLACEMENT_ID.fetch_add(1, Ordering::Relaxed) & 0x00FF_FFFF
 }
-pub fn write_to_cropped<W: Write>(
-    w: &mut W,
-    png_data: &[u8],
-    cols: u32,
-    rows: u32,
-    src_x: u32,
-    src_y: u32,
-    src_w: u32,
-    src_h: u32,
-) -> u32 {
-    let id = next_placement_id();
-    write_with_id_to_cropped(w, png_data, cols, rows, id, src_x, src_y, src_w, src_h);
-    id
+
+// --- helpers ---
+
+fn crop_string(src_x: u32, src_y: u32, src_w: u32, src_h: u32) -> String {
+    match (src_w > 0 || src_h > 0, src_x > 0 || src_y > 0) {
+        (true, _) => format!(",x={},y={},w={},h={}", src_x, src_y, src_w, src_h),
+        (false, true) => format!(",x={},y={}", src_x, src_y),
+        (false, false) => String::new(),
+    }
 }
 
-pub fn write_with_id_to_cropped<W: Write>(
+fn chunked_write<W: Write>(w: &mut W, first_control: &str, rest_control: &str, data: &str) {
+    let bytes = data.as_bytes();
+    let mut offset = 0;
+    let len = bytes.len();
+    while offset < len {
+        let end = (offset + CHUNK_SIZE).min(len);
+        let chunk = std::str::from_utf8(&bytes[offset..end]).unwrap();
+        let more = if end < len { 1 } else { 0 };
+        if offset == 0 {
+            write!(w, "\x1b_G{},m={},q=2;{}\x1b\\", first_control, more, chunk).unwrap();
+        } else if rest_control.is_empty() {
+            write!(w, "\x1b_Gm={};{}\x1b\\", more, chunk).unwrap();
+        } else {
+            write!(w, "\x1b_G{},m={};{}\x1b\\", rest_control, more, chunk).unwrap();
+        }
+        offset = end;
+    }
+}
+
+// --- raw-data API (base64-encode internally on every call) ---
+
+pub fn write_to_cropped<W: Write>(
     w: &mut W,
+    id: u32,
     png_data: &[u8],
     cols: u32,
     rows: u32,
-    id: u32,
     src_x: u32,
     src_y: u32,
     src_w: u32,
     src_h: u32,
 ) {
     let encoded = base64::engine::general_purpose::STANDARD.encode(png_data);
-    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(CHUNK_SIZE).collect();
-
-    for (i, chunk) in chunks.iter().enumerate() {
-        let more = if i < chunks.len() - 1 { 1 } else { 0 };
-        let chunk_str = std::str::from_utf8(chunk).unwrap();
-
-        if i == 0 {
-            // x,y: source pixel offset (crop origin)
-            // w,h: source pixel region size (0 = full, so only include if nonzero)
-            let crop = match (src_w > 0 || src_h > 0, src_x > 0 || src_y > 0) {
-                (true, _) => format!(",x={},y={},w={},h={}", src_x, src_y, src_w, src_h),
-                (false, true) => format!(",x={},y={}", src_x, src_y),
-                (false, false) => String::new(),
-            };
-            write!(
-                w,
-                "\x1b_Ga=T,f=100,t=d,i={},c={},r={},m={},q=2{};{}\x1b\\",
-                id, cols, rows, more, crop, chunk_str
-            )
-            .unwrap();
-        } else {
-            write!(w, "\x1b_Gm={};{}\x1b\\", more, chunk_str).unwrap();
-        }
-    }
+    let crop = crop_string(src_x, src_y, src_w, src_h);
+    chunked_write(
+        w,
+        &format!("a=T,f=100,t=d,i={},c={},r={}{}", id, cols, rows, crop),
+        "",
+        &encoded,
+    );
 }
-pub fn write_with_id_to<W: Write>(w: &mut W, png_data: &[u8], cols: u32, rows: u32, id: u32) {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(png_data);
-    let chunk_size = CHUNK_SIZE;
-    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(chunk_size).collect();
 
-    for (i, chunk) in chunks.iter().enumerate() {
-        let more = if i < chunks.len() - 1 { 1 } else { 0 };
-        let chunk_str = std::str::from_utf8(chunk).unwrap();
-
-        if i == 0 {
-            // first chunk include control patterns for kitty
-            // a=T: transmit and display
-            // f=100: PNG format
-            // t=d direct (data in payload)
-            // c=cols, r=rows: display size in cells
-            // m=more: 1 if more chunks follows, 0 if not
-            // q=2: quiet
-            write!(
-                w,
-                "\x1b_Ga=T,f=100,t=d,i={},c={},r={},m={},q=2;{}\x1b\\",
-                id, cols, rows, more, chunk_str
-            )
-            .unwrap();
-        } else {
-            write!(w, "\x1b_Gm={};{}\x1b\\", more, chunk_str).unwrap();
-        }
+pub fn write_animation_frames<W: Write>(w: &mut W, id: u32, frames: &[(Vec<u8>, u32)]) {
+    for (png_data, delay_ms) in frames {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png_data);
+        chunked_write(
+            w,
+            &format!("a=f,f=100,i={},z={}", id, delay_ms),
+            "a=f",
+            &encoded,
+        );
     }
 }
 
-pub fn delete_by_id<W: Write>(w: &mut W, id: u32) {
+// --- pre-encoded API (for cached base64 data) ---
+
+pub fn write_to_cropped_encoded<W: Write>(
+    w: &mut W,
+    id: u32,
+    encoded: &str,
+    cols: u32,
+    rows: u32,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+) {
+    let crop = crop_string(src_x, src_y, src_w, src_h);
+    chunked_write(
+        w,
+        &format!("a=T,f=100,t=d,i={},c={},r={}{}", id, cols, rows, crop),
+        "",
+        encoded,
+    );
+}
+
+pub fn write_animation_frames_encoded<W: Write>(w: &mut W, id: u32, frames: &[(&str, u32)]) {
+    for (encoded, delay_ms) in frames {
+        chunked_write(
+            w,
+            &format!("a=f,f=100,i={},z={}", id, delay_ms),
+            "a=f",
+            encoded,
+        );
+    }
+}
+
+// --- commands ---
+
+pub fn start_animation<W: Write>(w: &mut W, id: u32) {
+    write!(w, "\x1b_Ga=a,i={},s=3,v=1,q=2;\x1b\\", id).unwrap();
+}
+
+/// Delete placements only (lowercase d=i). Keeps image data cached so a=p can
+/// re-display it without retransmission.
+pub fn delete_placements<W: Write>(w: &mut W, id: u32) {
     write!(w, "\x1b_Ga=d,d=i,i={},q=2;\x1b\\", id).unwrap();
+}
+
+/// Delete placements AND free image data (uppercase d=I).
+pub fn delete_image<W: Write>(w: &mut W, id: u32) {
+    write!(w, "\x1b_Ga=d,d=I,i={},q=2;\x1b\\", id).unwrap();
+}
+
+/// Alias for delete_image — used by ImageGuard for cleanup on drop.
+pub fn delete_by_id<W: Write>(w: &mut W, id: u32) {
+    delete_image(w, id);
 }
 
 pub fn delete_all<W: Write>(w: &mut W) {
     write!(w, "\x1b_Ga=d,d=a,q=2;\x1b\\").unwrap();
 }
+
+/// Place an already-transmitted image at the cursor position without retransmitting data.
+/// Each call creates a fresh placement — no placement ID is used so the placement is
+/// always positioned at the current cursor when the escape code is emitted.
+pub fn place_image<W: Write>(
+    w: &mut W,
+    id: u32,
+    cols: u32,
+    rows: u32,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+) {
+    let crop = crop_string(src_x, src_y, src_w, src_h);
+    write!(
+        w,
+        "\x1b_Ga=p,i={},c={},r={}{},q=2;\x1b\\",
+        id, cols, rows, crop
+    )
+    .unwrap();
+}
+
+// --- ImageGuard ---
 
 pub struct ImageGuard {
     id: u32,
@@ -123,6 +176,10 @@ pub struct ImageGuard {
 impl ImageGuard {
     pub fn new() -> Self {
         Self { id: 0 }
+    }
+
+    pub fn set_id(&mut self, id: u32) {
+        self.id = id;
     }
 
     pub fn set(&mut self, id: u32) {

@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
-use crate::assets::asset_cache::AssetCache;
+use crate::assets::asset_cache::{AssetCache, ImageData};
 use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
 use tylax::latex_to_typst;
@@ -30,8 +30,8 @@ pub fn render_math(
     dark_theme.hash(&mut hasher);
     let cache_key = hasher.finish();
 
-    if let Some(cached) = MATH_CACHE.get(cache_key) {
-        return Ok(cached);
+    if let Some(ImageData::Png(data, w, h)) = MATH_CACHE.get(cache_key) {
+        return Ok((data, w, h));
     }
 
     let typst_math = latex_to_typst(latex);
@@ -42,7 +42,7 @@ pub fn render_math(
 
     let svg = typst_svg::svg(&document.pages[0]);
     let result = rasterize_svg_to_png(&svg, max_width)?;
-    MATH_CACHE.insert(cache_key, result.0.clone(), result.1, result.2);
+    MATH_CACHE.insert(cache_key, ImageData::Png(result.0.clone(), result.1, result.2));
     Ok(result)
 }
 
