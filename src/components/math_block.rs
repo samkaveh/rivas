@@ -105,9 +105,15 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
 
                         // a=T auto-places at cursor — placement is tracked by id
                         kitty::write_to_cropped(
-                            &mut stdout, id, &data,
-                            vis_cols as u32, vis_rows as u32,
-                            0, src_y_px, crop_w_px, crop_h_px,
+                            &mut stdout,
+                            id,
+                            &data,
+                            vis_cols as u32,
+                            vis_rows as u32,
+                            0,
+                            src_y_px,
+                            crop_w_px,
+                            crop_h_px,
                         );
 
                         last_id = id;
@@ -137,9 +143,14 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
 
                         // Create fresh placement at cursor (no retransmission)
                         kitty::place_image(
-                            &mut stdout, id,
-                            vis_cols as u32, vis_rows as u32,
-                            0, src_y_px, crop_w_px, crop_h_px,
+                            &mut stdout,
+                            id,
+                            vis_cols as u32,
+                            vis_rows as u32,
+                            0,
+                            src_y_px,
+                            crop_w_px,
+                            crop_h_px,
                         );
 
                         write!(stdout, "\x1b8").unwrap();
@@ -179,8 +190,18 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     }
 
     if error_msg.read().is_none() && data_cache.read().is_empty() {
-        let cell_w = caps_cache.read().clone().unwrap_or_default().cell_w_px.max(1) as u32;
-        match render_math(props.content.as_str(), props.display, (cell_w * 2).max(16) * vw, true) {
+        let cell_w = caps_cache
+            .read()
+            .clone()
+            .unwrap_or_default()
+            .cell_w_px
+            .max(1) as u32;
+        match render_math(
+            props.content.as_str(),
+            props.display,
+            (cell_w * 2).max(16) * vw,
+            true,
+        ) {
             Ok(loaded_image) => {
                 data_cache.set(loaded_image.0);
                 let mut cols_ = loaded_image.1;

@@ -36,6 +36,9 @@ pub fn render_mermaid_to_png(source: &str, max_width: u32) -> Result<(Vec<u8>, u
     }
 
     let result = rasterize_svg_to_png(&svg, max_width)?;
-    MERMAID_CACHE.insert(cache_key, ImageData::Png(result.0.clone(), result.1, result.2));
+    MERMAID_CACHE.insert(
+        cache_key,
+        ImageData::Png(result.0.clone(), result.1, result.2),
+    );
     Ok(result)
 }
