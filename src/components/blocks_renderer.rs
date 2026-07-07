@@ -199,8 +199,17 @@ pub fn BlocksRenderer(
 
                 if is_active || is_selected {
                     let off = cursor_offset.unwrap_or(0);
-                    let text = &props.content[span.0..span.1];
-                    let rel_off = off.saturating_sub(span.0).min(text.len());
+                    let text_end = if is_active && off > span.1 {
+                        if i + 1 == block_counts {
+                            off.min(next_span_start)
+                        } else {
+                            off.min(next_span_start - 1)
+                        }
+                    } else {
+                        span.1
+                    };
+                    let text = &props.content[span.0..text_end];
+                    let rel_off = (off - span.0).min(text.len());
 
                     let lines: Vec<&str> = text.split('\n').collect();
                     let mut current_byte_acc = 0;
@@ -269,6 +278,9 @@ pub fn BlocksRenderer(
                                     segments.push(&remaining[..split_at]);
                                     remaining = &remaining[split_at..];
                                 }
+                                if segments.is_empty() {
+                                    segments.push("");
+                                }
 
                                 element! {
                                     View(flex_direction: FlexDirection::Column) {
@@ -281,7 +293,7 @@ pub fn BlocksRenderer(
                                                     let seg_chars: Vec<char> = segment.chars().collect();
                                                     for c in seg_chars {
                                                         let char_len = c.len_utf8();
-                                                        let is_selected = current_pos >= start && current_pos < end;
+                                                        let is_selected = current_pos >= start && current_pos <= end;
                                                         if let Some(last) = line_parts.last_mut() {
                                                             if last.0 == is_selected {
                                                                 last.1.push(c);
@@ -306,7 +318,7 @@ pub fn BlocksRenderer(
                                                 let mut seg_idx_cursor = 0;
                                                 let mut seg_rel_off = cursor_rel_off;
                                                 for seg in &segments {
-                                                    if seg_rel_off < seg.len() { break; }
+                                                    if seg_rel_off <= seg.len() { break; }
                                                     seg_rel_off -= seg.len();
                                                     seg_idx_cursor += 1;
                                                 }

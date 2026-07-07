@@ -1,14 +1,14 @@
 use crate::output::kitty;
 use crate::theme;
 use crate::{
-    assets::images::{load_image, ImageData},
+    assets::images::{ImageData, load_image},
     output::capabilities::TermCaps,
 };
 use iocraft::prelude::*;
 use std::{
     io::Write,
     path::PathBuf,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
 };
 
 enum IoCmd {
@@ -83,7 +83,11 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let mut rows = hooks.use_ref(|| 0u32);
     let mut error_msg = hooks.use_state(|| None::<String>);
     let mut loading = hooks.use_ref(|| false);
-    let mut load_result = hooks.use_ref(|| Arc::new(Mutex::new(None::<Result<(String, Vec<(String, u32)>, u32, u32), String>>)));
+    let mut load_result = hooks.use_ref(|| {
+        Arc::new(Mutex::new(
+            None::<Result<(String, Vec<(String, u32)>, u32, u32), String>>,
+        ))
+    });
     let mut transmitted = hooks.use_ref(|| false);
     let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
     let io_tx = hooks.use_ref(|| {
@@ -124,18 +128,21 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
                         // a=T auto-places at cursor — placement is tracked by id
                         kitty::write_to_cropped_encoded(
-                            &mut stdout, id, data.as_str(),
-                            vis_cols as u32, vis_rows as u32,
-                            0, src_y_px, crop_w_px, crop_h_px,
+                            &mut stdout,
+                            id,
+                            data.as_str(),
+                            vis_cols as u32,
+                            vis_rows as u32,
+                            0,
+                            src_y_px,
+                            crop_w_px,
+                            crop_h_px,
                         );
 
                         if !frames.is_empty() {
-                            let frames_ref: Vec<(&str, u32)> = frames.iter()
-                                .map(|(s, d)| (s.as_str(), *d))
-                                .collect();
-                            kitty::write_animation_frames_encoded(
-                                &mut stdout, id, &frames_ref,
-                            );
+                            let frames_ref: Vec<(&str, u32)> =
+                                frames.iter().map(|(s, d)| (s.as_str(), *d)).collect();
+                            kitty::write_animation_frames_encoded(&mut stdout, id, &frames_ref);
                             kitty::start_animation(&mut stdout, id);
                         }
 
@@ -166,9 +173,14 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
                         // Create fresh placement at cursor (no retransmission)
                         kitty::place_image(
-                            &mut stdout, id,
-                            vis_cols as u32, vis_rows as u32,
-                            0, src_y_px, crop_w_px, crop_h_px,
+                            &mut stdout,
+                            id,
+                            vis_cols as u32,
+                            vis_rows as u32,
+                            0,
+                            src_y_px,
+                            crop_w_px,
+                            crop_h_px,
                         );
 
                         write!(stdout, "\x1b8").unwrap();
@@ -217,7 +229,12 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
             loading.set(true);
 
             let result_shared = load_result.read().clone();
-            let cell_w = caps_cache.read().clone().unwrap_or_default().cell_w_px.max(1) as f32;
+            let cell_w = caps_cache
+                .read()
+                .clone()
+                .unwrap_or_default()
+                .cell_w_px
+                .max(1) as f32;
             let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
             let url = url.clone();
             let base_dir = base_dir.map(|p| p.to_path_buf());
@@ -234,11 +251,15 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                                 (b64, Vec::new(), w, h)
                             }
                             ImageData::Gif { frames, .. } => {
-                                let first = base64::engine::general_purpose::STANDARD.encode(&frames[0].0);
+                                let first =
+                                    base64::engine::general_purpose::STANDARD.encode(&frames[0].0);
                                 let rest = frames[1..]
                                     .iter()
                                     .map(|(png, delay)| {
-                                        (base64::engine::general_purpose::STANDARD.encode(png), *delay)
+                                        (
+                                            base64::engine::general_purpose::STANDARD.encode(png),
+                                            *delay,
+                                        )
                                     })
                                     .collect();
                                 (first, rest, w, h)
@@ -261,7 +282,12 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
             match result {
                 Ok((b64_data, rest_frames, img_w, img_h)) => {
                     data_cache.set(Arc::new(b64_data));
-                    frames_cache.set(rest_frames.into_iter().map(|(s, d)| (Arc::new(s), d)).collect());
+                    frames_cache.set(
+                        rest_frames
+                            .into_iter()
+                            .map(|(s, d)| (Arc::new(s), d))
+                            .collect(),
+                    );
 
                     let caps = caps_cache.read().clone().unwrap_or_default();
                     let mut cols_ = img_w;

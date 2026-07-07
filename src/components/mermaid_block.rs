@@ -104,9 +104,15 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
                         // a=T auto-places at cursor — placement is tracked by id
                         kitty::write_to_cropped(
-                            &mut stdout, id, &data,
-                            vis_cols as u32, vis_rows as u32,
-                            0, src_y_px, crop_w_px, crop_h_px,
+                            &mut stdout,
+                            id,
+                            &data,
+                            vis_cols as u32,
+                            vis_rows as u32,
+                            0,
+                            src_y_px,
+                            crop_w_px,
+                            crop_h_px,
                         );
 
                         last_id = id;
@@ -136,9 +142,14 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
                         // Create fresh placement at cursor (no retransmission)
                         kitty::place_image(
-                            &mut stdout, id,
-                            vis_cols as u32, vis_rows as u32,
-                            0, src_y_px, crop_w_px, crop_h_px,
+                            &mut stdout,
+                            id,
+                            vis_cols as u32,
+                            vis_rows as u32,
+                            0,
+                            src_y_px,
+                            crop_w_px,
+                            crop_h_px,
                         );
 
                         write!(stdout, "\x1b8").unwrap();
@@ -180,7 +191,12 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     }
 
     if error_msg.read().is_none() && data_cache.read().is_empty() {
-        let cell_w = caps_cache.read().clone().unwrap_or_default().cell_w_px.max(1) as f32;
+        let cell_w = caps_cache
+            .read()
+            .clone()
+            .unwrap_or_default()
+            .cell_w_px
+            .max(1) as f32;
         let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
         match render_mermaid_to_png(&props.source, max_w) {
             Ok(loaded_image) => {

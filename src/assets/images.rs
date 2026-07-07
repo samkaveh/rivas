@@ -3,14 +3,14 @@ use std::hash::{Hash, Hasher};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, ImageDecoder, ImageEncoder};
 
 const MAX_GIF_FRAMES: usize = 60;
 
-pub use crate::assets::asset_cache::ImageData;
 use crate::assets::asset_cache::AssetCache;
+pub use crate::assets::asset_cache::ImageData;
 
 static IMAGE_CACHE: std::sync::LazyLock<AssetCache> = std::sync::LazyLock::new(AssetCache::new);
 
@@ -135,7 +135,8 @@ fn load_gif_frames(path: &Path, max_width: u32) -> Result<ImageData> {
         let mut rgba = frame.clone().into_buffer();
 
         if scale != 1.0 {
-            rgba = image::imageops::resize(&rgba, out_w, out_h, image::imageops::FilterType::Lanczos3);
+            rgba =
+                image::imageops::resize(&rgba, out_w, out_h, image::imageops::FilterType::Lanczos3);
         }
 
         let mut png_buf = Vec::new();
