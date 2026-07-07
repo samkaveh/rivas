@@ -55,7 +55,7 @@ Note: Only works with nightly WezTerm on windows (since other versions do not ha
 
 ```bash
 # Download the binary
-curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.2.6/rivas-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.2.7/rivas-x86_64-unknown-linux-gnu.tar.gz
 
 # Extract and install
 tar -xzf rivas-x86_64-unknown-linux-gnu.tar.gz

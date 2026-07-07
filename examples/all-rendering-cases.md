@@ -107,6 +107,14 @@ After the rule.
 
 ![Seedling image](../seedling.png)
 
+## Remote Image
+
+![Remote placeholder](https://placehold.co/400x200/EEE/31343C?text=Hello+Rivas)
+
+## SVG Image
+
+![SVG rendered via resvg](https://dev.w3.org/SVG/tools/svgweb/samples/svg-files/check.svg)
+
 ## Mermaid
 
 ```mermaid
