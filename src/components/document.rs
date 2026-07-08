@@ -1,4 +1,6 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use iocraft::prelude::*;
 
@@ -7,6 +9,15 @@ use crate::components::editor::{Buffer, EditorState, Mode, handle_key};
 use crate::document::cache::ParseCache;
 use crate::document::parser::parse_markdown;
 use crate::theme;
+
+fn mode_color(mode: &Mode) -> iocraft::prelude::Color {
+    match mode {
+        Mode::Normal => theme::BLUE,
+        Mode::Insert => theme::GREEN,
+        Mode::Visual => theme::MAGENTA,
+        Mode::Command | Mode::Search { .. } => theme::YELLOW,
+    }
+}
 
 #[derive(Default, Props)]
 pub struct DocumentProps {
@@ -19,6 +30,7 @@ pub struct DocumentProps {
     pub cursor_offset: Option<Ref<usize>>,
     pub on_change: Handler<String>,
     pub on_quit: Handler<()>,
+    pub socket_messages: Option<Arc<Mutex<VecDeque<String>>>>,
 }
 
 #[component]
@@ -268,7 +280,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 }
             }
             View(width: 100pct, height: 1, background_color: theme::STATUS_BG, flex_direction: FlexDirection::Row) {
-                View(background_color: current_mode.color(), padding_left: 1, padding_right: 1) {
+                View(background_color: mode_color(&current_mode), padding_left: 1, padding_right: 1) {
                     Text(content: format!(" {} ", current_mode.label()), color: theme::DARK_BG, weight: Weight::Bold)
                 }
                 View(flex_grow: 1.0, padding_left: 1) {
@@ -281,8 +293,22 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                             Text(content: current_cmd.clone(), color: theme::FG)
                         })
                     } else {
+                        // Show socket message if available, otherwise show editor message
+                        let display_msg = if let Some(ref msgs) = props.socket_messages {
+                            if let Ok(msgs) = msgs.lock() {
+                                if let Some(msg) = msgs.back() {
+                                    msg.clone()
+                                } else {
+                                    current_msg.clone()
+                                }
+                            } else {
+                                current_msg.clone()
+                            }
+                        } else {
+                            current_msg.clone()
+                        };
                         Some(element! {
-                            Text(content: current_msg.clone(), color: theme::FG)
+                            Text(content: display_msg, color: theme::FG)
                         })
                     }.into_iter())
                 }

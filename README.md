@@ -18,6 +18,8 @@ protocol.
 - LaTeX-style math rendered through MiTeX and Typst.
 - Vim-style source editing with a side-by-side live preview.
 - Vim-style keyboard navigation in the rendered viewer.
+- **CLI interface for AI agent integration** (new in v0.3.0).
+- **Watch mode for collaborative editing** (new in v0.3.0).
 
 ![demo of rivas features](./rivas_demo.gif)
 
@@ -72,6 +74,95 @@ rivas examples/all-rendering-cases.md
 
 Rivas supports edit in place with neovim style editting and key shortcuts.
 
+## CLI Interface (New in v0.3.0)
+
+Rivas now includes a CLI interface for AI agent integration, enabling collaborative editing where humans work in the TUI while agents send commands via CLI.
+
+### Watch Mode
+
+Start Rivas in watch mode to enable CLI interaction:
+
+```bash
+rivas --watch document.md
+```
+
+This creates a Unix socket at `/tmp/rivas-{hash}.sock` for CLI communication.
+
+### CLI Client
+
+Use the `rivas-cli` binary to send vim commands:
+
+```bash
+# Execute a vim command
+rivas-cli exec "10G"      # Go to line 10
+rivas-cli exec "dd"       # Delete current line
+rivas-cli exec ":w"       # Save file
+
+# Execute multiple commands
+rivas-cli exec-many "10G" "dd" ":w"
+
+# Query editor state
+rivas-cli query cursor    # Get cursor position
+rivas-cli query content   # Get file content
+rivas-cli query status    # Get full status
+
+# JSON output for parsing
+rivas-cli --format json exec "dd"
+rivas-cli --format json query status
+```
+
+### Supported Vim Commands
+
+**Motions:** `h`, `l`, `j`, `k`, `w`, `b`, `e`, `0`, `^`, `$`, `G`, `gg`, `{`, `}`
+
+**Operators:** `dd`, `yy`, `x`, `p`, `P`, `J`, `~`, `r{char}`
+
+**Mode Changes:** `i`, `a`, `I`, `A`, `o`, `O`
+
+**Search:** `/pattern`, `?pattern`, `n`, `N`
+
+**Commands:** `:w`, `:q`, `:wq`, `:q!`
+
+**Counts:** Prefix any motion or operator: `3j`, `5dd`, `10G`
+
+### Example: Agent Collaboration
+
+```bash
+# Terminal 1: Human opens Rivas in watch mode
+rivas --watch document.md
+
+# Terminal 2: Agent makes edits
+rivas-cli exec "Go## New Section"    # Add heading at end
+rivas-cli exec "o- Item 1"          # Add list item
+rivas-cli exec "- Item 2"           # Add another item
+rivas-cli exec ":w"                 # Save changes
+
+# Agent checks result
+rivas-cli query status
+```
+
+### JSON Protocol
+
+**Request:**
+```json
+{
+  "id": "cmd-123",
+  "command": "dd",
+  "args": []
+}
+```
+
+**Response:**
+```json
+{
+  "id": "cmd-123",
+  "success": true,
+  "message": "1 line deleted",
+  "cursor": {"row": 9, "col": 0},
+  "modified": true
+}
+```
+
 ## Supported Markdown Notes
 
 Math can be written inline with dollar delimiters:
@@ -117,3 +208,38 @@ cargo test
 
 The math tests compile LaTeX-like input through TyLax and Typst, rasterize the
 resulting SVG to PNG, and verify that rendered output is not an all-white page.
+
+### Building from Source
+
+```sh
+# Build the main binary
+cargo build --release
+
+# Build the CLI client
+cargo build --bin rivas-cli --release
+
+# Run tests
+cargo test
+```
+
+### Project Structure
+
+```
+src/
+  main.rs                 # Main TUI application
+  lib.rs                  # Library exports (Editor API)
+  bin/
+    rivas-cli.rs          # CLI client binary
+  editor/                 # Core editor logic (library)
+    buffer.rs             # Text buffer implementation
+    state.rs              # Editor state management
+    action.rs             # Vim actions and motions
+    position.rs           # Cursor position types
+  protocol/               # JSON protocol for CLI
+    types.rs              # Request/response types
+    socket.rs             # Unix socket communication
+  components/             # TUI components (iocraft)
+    editor.rs             # Key handling for TUI
+    document.rs           # Document rendering
+    ...
+```
