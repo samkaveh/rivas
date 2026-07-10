@@ -1,7 +1,7 @@
 use crate::theme;
 use iocraft::prelude::*;
 use std::io::Write;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 
 use crate::{
     assets::mermaid::render_mermaid_to_png,
@@ -68,6 +68,9 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     let mut cols = hooks.use_ref(|| 0u32);
     let mut rows = hooks.use_ref(|| 0u32);
     let mut error_msg = hooks.use_state(|| None::<String>);
+    let mut loading = hooks.use_ref(|| false);
+    let mut load_result =
+        hooks.use_ref(|| Arc::new(Mutex::new(None::<Result<(Vec<u8>, u32, u32), String>>)));
     let mut transmitted = hooks.use_ref(|| false);
     let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
     let io_tx = hooks.use_ref(|| {
@@ -188,33 +191,59 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         rows.set(0);
         drawn_at.set((-1, -1));
         error_msg.set(None);
+        loading.set(false);
+        load_result.set(Arc::new(Mutex::new(None)));
     }
 
     if error_msg.read().is_none() && data_cache.read().is_empty() {
-        let cell_w = caps_cache
-            .read()
-            .clone()
-            .unwrap_or_default()
-            .cell_w_px
-            .max(1) as f32;
-        let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
-        match render_mermaid_to_png(&props.source, max_w) {
-            Ok(loaded_image) => {
-                data_cache.set(loaded_image.0);
-                let mut cols_ = loaded_image.1;
-                let mut rows_ = loaded_image.2;
-                let caps = caps_cache.read().clone().unwrap_or_default();
+        if !*loading.read() {
+            loading.set(true);
 
-                cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-                cols_ = cols_.min((2.0 * vw as f32).round() as u32);
-                rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
-                rows_ = rows_.min(vh);
+            let result_shared = load_result.read().clone();
+            let cell_w = caps_cache
+                .read()
+                .clone()
+                .unwrap_or_default()
+                .cell_w_px
+                .max(1) as f32;
+            let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
+            let source = props.source.clone();
 
-                cols.set(cols_);
-                rows.set(rows_);
-            }
-            Err(e) => {
-                error_msg.set(Some(format!("Error: {:#}", e)));
+            std::thread::spawn(move || {
+                let result = render_mermaid_to_png(&source, max_w).map_err(|e| format!("{:#}", e));
+                let mut guard = result_shared.lock().unwrap();
+                *guard = Some(result);
+            });
+        }
+
+        let maybe_result = {
+            let arc = load_result.read().clone();
+            let mut guard = arc.lock().unwrap();
+            guard.take()
+        };
+
+        if let Some(result) = maybe_result {
+            match result {
+                Ok((png_data, img_w, img_h)) => {
+                    data_cache.set(png_data);
+                    let mut cols_ = img_w;
+                    let mut rows_ = img_h;
+                    let caps = caps_cache.read().clone().unwrap_or_default();
+
+                    cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
+                    cols_ = cols_.min((2.0 * vw as f32).round() as u32);
+                    rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
+                    rows_ = rows_.min(vh);
+
+                    cols.set(cols_);
+                    rows.set(rows_);
+
+                    drawn_at.set((-1, -1));
+                }
+                Err(err_str) => {
+                    error_msg.set(Some(err_str));
+                    loading.set(false);
+                }
             }
         }
     }

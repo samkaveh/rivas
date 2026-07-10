@@ -10,7 +10,7 @@ use crate::components::paragraph::Paragraph;
 use crate::components::quote_block::QuoteBlock;
 use crate::components::table_block::TableBlock;
 use crate::components::thematic_break::ThematicBreak;
-use crate::document::model::Block;
+use crate::document::model::{Block, inlines_to_text};
 use crate::theme;
 use iocraft::prelude::*;
 use std::path::PathBuf;
@@ -47,6 +47,32 @@ fn head_to_width(s: &str, max: usize) -> String {
         width += w;
     }
     out
+}
+
+// Estimate the height of a block in terminal rows
+fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
+    let wrap_width = vw.unwrap_or(80) as usize;
+    match block {
+        Block::Heading { .. } => 2,
+        Block::Paragraph { content, .. } => {
+            let text = inlines_to_text(content);
+            let chars = text.chars().count();
+            ((chars as f32 / wrap_width as f32).ceil() as u32).max(1)
+        }
+        Block::Code { code, .. } => code.lines().count() as u32 + 2,
+        Block::Math { .. } => 5,
+        Block::Mermaid { .. } => 10,
+        Block::Table { rows, .. } => (rows.len() + 1) as u32,
+        Block::List { items, .. } => items.len() as u32,
+        Block::Quote { children, .. } => children
+            .iter()
+            .map(|b| estimate_block_height(b, content, vw))
+            .sum::<u32>()
+            .max(1),
+        Block::ThematicBreak { .. } => 1,
+        Block::Image { .. } => 5,
+        Block::Html { content, .. } => content.lines().count() as u32,
+    }
 }
 
 #[derive(Default, Props)]
@@ -121,6 +147,7 @@ pub struct BlocksRendererProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scroll_offset: Option<i32>,
     pub cursor_offset: Option<Ref<usize>>,
     pub editor_state: Option<Ref<Option<EditorState>>>,
     pub scroll_handle: Option<Ref<ScrollViewHandle>>,
@@ -173,9 +200,59 @@ pub fn BlocksRenderer(
         };
 
     let block_counts = props.blocks.len();
+
+    // Cache cumulative block heights and start offsets — only recompute when blocks change
+    let cum_key = format!("{}:{}", block_counts, vw.unwrap_or(0));
+    let mut cum_data = hooks.use_ref(|| (Vec::<u32>::new(), Vec::<usize>::new()));
+    let mut cum_key_ref = hooks.use_ref(String::new);
+    if *cum_key_ref.read() != cum_key {
+        let mut cumulative = Vec::with_capacity(block_counts + 1);
+        let mut starts = Vec::with_capacity(block_counts);
+        let mut total = 0u32;
+        cumulative.push(0);
+        for block in &props.blocks {
+            starts.push(block.span().0);
+            total += estimate_block_height(block, &props.content, vw);
+            cumulative.push(total);
+        }
+        cum_data.set((cumulative, starts));
+        cum_key_ref.set(cum_key);
+    }
+
+    // Binary search to find visible range using cached cumulative heights
+    let scroll_offset = props.scroll_offset.unwrap_or(0).max(0) as u32;
+    let viewport_h = props.viewport_height.unwrap_or(24);
+    let buffer = viewport_h * 2;
+    let (heights, starts) = &*cum_data.read();
+
+    let first_visible = heights
+        .partition_point(|&h| h < scroll_offset.saturating_sub(buffer))
+        .min(block_counts);
+    let last_visible = heights
+        .partition_point(|&h| h <= scroll_offset + viewport_h + buffer)
+        .min(block_counts);
+
+    // Binary search for cursor block using cached start offsets
+    let cursor_block_idx = cursor_offset
+        .map(|off| match starts.binary_search(&off) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        })
+        .unwrap_or(0)
+        .min(block_counts.saturating_sub(1));
+
+    let first_visible = first_visible.min(cursor_block_idx);
+    let last_visible = last_visible.max(cursor_block_idx + 1);
+
     element! {
         View(flex_direction: FlexDirection::Column) {
             #(props.blocks.iter().enumerate().map(|(i, block)| {
+                // Virtual scrolling: skip off-screen blocks
+                if i < first_visible || i >= last_visible {
+                    let h = heights[i + 1] - heights[i];
+                    return element! { View(height: h) {} }.into_any();
+                }
+
                 let span = block.span();
                 let next_span_start = props.blocks.get(i + 1).map(|b| b.span().0).unwrap_or(props.content.len());
 

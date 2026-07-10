@@ -254,16 +254,17 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     scrollbar_track_color: Some(theme::DARK_BG),
                 ) {
                     View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_top: 1, padding_bottom: 1) {
-                        BlocksRenderer(
-                            blocks: doc.blocks,
-                            content: current_content,
-                            file_path: file_path,
-                            viewport_height: vh,
-                            viewport_width: vw,
-                            cursor_offset: props.cursor_offset.clone(),
-                            editor_state: Some(editor_state.clone()),
-                            scroll_handle: Some(scroll_handle.clone()),
-                        )
+                    BlocksRenderer(
+                        blocks: doc.blocks,
+                        content: current_content,
+                        file_path: file_path,
+                        viewport_height: vh,
+                        viewport_width: vw,
+                        scroll_offset: Some(scroll_handle.read().scroll_offset()),
+                        cursor_offset: props.cursor_offset.clone(),
+                        editor_state: Some(editor_state.clone()),
+                        scroll_handle: Some(scroll_handle.clone()),
+                    )
                     }
                 }
             }
