@@ -87,7 +87,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     let _keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
     let scroll_handle = hooks.use_ref_default::<ScrollViewHandle>();
     let mut pending_g = hooks.use_state(|| false);
-    let prev_cursor_row = hooks.use_ref(|| 0usize);
     let _follow_ref = props.follow_ref;
     let on_change = props.on_change.clone();
     let on_quit = props.on_quit.clone();
@@ -100,7 +99,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         let mut tick = tick.clone();
         let on_change = on_change.clone();
         let on_quit = on_quit.clone();
-        let mut prev_cursor_row = prev_cursor_row.clone();
         move |event| {
             let TerminalEvent::Key(KeyEvent {
                 code,
@@ -121,7 +119,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             // Handle editing
             let mut quit = false;
             let mut changed = false;
-            let mut cursor_row = None;
             if let Some(s) = editor_state.write().as_mut() {
                 let before = s.buf.to_text();
                 s.view_height = vh.unwrap_or(20) as usize;
@@ -140,7 +137,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 if let Some(mut off_ref) = cursor_offset.clone() {
                     off_ref.set(s.absolute_byte_offset());
                 }
-                cursor_row = Some(s.row);
             }
 
             if quit {
@@ -156,40 +152,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             let viewport_height = scroll_handle.read().viewport_height() as i32;
             let page = viewport_height.max(1);
             let half_page = (page / 2).max(1);
-
-            // Incremental scroll: instead of proportional centering (which breaks
-            // because rendered content height doesn't map linearly to line numbers),
-            // just scroll by small increments based on cursor direction.
-            let mut update_scroll = |current_row: usize| {
-                let state_guard = editor_state.read();
-                let total_logical_lines = state_guard
-                    .as_ref()
-                    .map(|s| s.buf.line_count())
-                    .unwrap_or(1);
-                drop(state_guard);
-
-                let vh = vh.unwrap_or(0) as i32;
-                let ch = scroll_handle.read().content_height() as i32;
-
-                if ch <= vh {
-                    return;
-                }
-
-                // Boundary handling: snap to top/bottom at document edges
-                if current_row == 0 {
-                    scroll_handle.write().scroll_to(0);
-                    return;
-                }
-                if current_row >= total_logical_lines.saturating_sub(1) {
-                    scroll_handle.write().scroll_to(ch - vh);
-                    return;
-                }
-            };
-
-            if let Some(row) = cursor_row {
-                update_scroll(row);
-                prev_cursor_row.set(row);
-            }
 
             match code {
                 KeyCode::Char('g') if !ctrl && pending_g.get() => {

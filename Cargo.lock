@@ -3854,7 +3854,7 @@ dependencies = [
 
 [[package]]
 name = "rivas"
-version = "0.2.7"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "arboard",

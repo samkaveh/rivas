@@ -6,10 +6,52 @@ use crate::{
 };
 use iocraft::prelude::*;
 use std::{
+    collections::HashMap,
     io::Write,
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
 };
+
+/// Global cache of actual image dimensions (cols, rows) keyed by "vw:url".
+/// Lets the virtual-scrolling height estimator use real heights instead of
+/// guessing, preventing layout instability when images scroll off-screen.
+pub struct ImageHeightCache {
+    heights: RwLock<HashMap<String, (u32, u32)>>,
+    generation: AtomicU64,
+}
+
+impl ImageHeightCache {
+    pub fn new() -> Self {
+        Self {
+            heights: RwLock::new(HashMap::new()),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<(u32, u32)> {
+        self.heights.read().unwrap().get(key).copied()
+    }
+
+    pub fn set(&self, key: &str, cols: u32, rows: u32) {
+        let mut map = self.heights.write().unwrap();
+        if map.get(key).copied() != Some((cols, rows)) {
+            map.insert(key.to_string(), (cols, rows));
+            self.generation.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+}
+
+lazy_static::lazy_static! {
+    pub static ref IMAGE_HEIGHT_CACHE: ImageHeightCache = ImageHeightCache::new();
+}
 
 enum IoCmd {
     Render {
@@ -72,6 +114,11 @@ pub struct KittyImageProps {
 
 #[component]
 pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let url = &props.url;
+    let vw = props.viewport_width.unwrap_or(100);
+    let key = format!("{}:{}", vw, url);
+    let (cached_cols, cached_rows) = IMAGE_HEIGHT_CACHE.get(&key).unwrap_or((0, 0));
+
     let rect = hooks.use_component_rect();
     let (term_width, term_height) = hooks.use_terminal_size();
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
@@ -79,8 +126,8 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let mut data_cache = hooks.use_ref(|| Arc::new(String::new()));
     let mut frames_cache = hooks.use_ref(|| Vec::<(Arc<String>, u32)>::new());
     let mut cache_key = hooks.use_ref(String::new);
-    let mut cols = hooks.use_ref(|| 0u32);
-    let mut rows = hooks.use_ref(|| 0u32);
+    let mut cols = hooks.use_ref(|| cached_cols);
+    let mut rows = hooks.use_ref(|| cached_rows);
     let mut error_msg = hooks.use_state(|| None::<String>);
     let mut loading = hooks.use_ref(|| false);
     let mut load_result = hooks.use_ref(|| {
@@ -215,8 +262,9 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         cache_key.set(key.clone());
         data_cache.set(Arc::new(String::new()));
         frames_cache.set(Vec::new());
-        cols.set(0);
-        rows.set(0);
+        let (cached_cols, cached_rows) = IMAGE_HEIGHT_CACHE.get(&key).unwrap_or((0, 0));
+        cols.set(cached_cols);
+        rows.set(cached_rows);
         drawn_at.set((-1, -1));
         error_msg.set(None);
         loading.set(false);
@@ -298,6 +346,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                     rows_ = rows_.min(vh);
                     cols.set(cols_);
                     rows.set(rows_);
+                    IMAGE_HEIGHT_CACHE.set(&key, cols_, rows_);
 
                     drawn_at.set((-1, -1));
                 }
