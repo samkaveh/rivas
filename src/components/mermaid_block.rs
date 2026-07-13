@@ -1,3 +1,4 @@
+use crate::components::image::IMAGE_HEIGHT_CACHE;
 use crate::theme;
 use iocraft::prelude::*;
 use std::io::Write;
@@ -59,14 +60,18 @@ enum MermaidCmd {
 
 #[component]
 pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let vw = props.viewport_width.unwrap_or(100);
+    let key = format!("mermaid:{}:{}", vw, props.source);
+    let (cached_cols, cached_rows) = IMAGE_HEIGHT_CACHE.get(&key).unwrap_or((0, 0));
+
     let rect = hooks.use_component_rect();
     let (term_width, term_height) = hooks.use_terminal_size();
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
     let mut image_id = hooks.use_ref(|| kitty::ImageGuard::new());
     let mut data_cache = hooks.use_ref(|| Vec::<u8>::new());
     let mut cache_key = hooks.use_ref(String::new);
-    let mut cols = hooks.use_ref(|| 0u32);
-    let mut rows = hooks.use_ref(|| 0u32);
+    let mut cols = hooks.use_ref(|| cached_cols);
+    let mut rows = hooks.use_ref(|| cached_rows);
     let mut error_msg = hooks.use_state(|| None::<String>);
     let mut loading = hooks.use_ref(|| false);
     let mut load_result =

@@ -2,7 +2,7 @@ use crate::components::code_block::CodeBlock;
 use crate::components::editor::{EditorState, Mode};
 use crate::components::heading::Heading;
 use crate::components::html_block::HtmlBlock;
-use crate::components::image::Image;
+use crate::components::image::{IMAGE_HEIGHT_CACHE, Image};
 use crate::components::list_block::ListBlock;
 use crate::components::math_block::MathBlock;
 use crate::components::mermaid_block::MermaidBlock;
@@ -70,7 +70,13 @@ fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
             .sum::<u32>()
             .max(1),
         Block::ThematicBreak { .. } => 1,
-        Block::Image { .. } => 5,
+        Block::Image { url, .. } => {
+            let cache_key = format!("{}:{}", vw.unwrap_or(0), url);
+            IMAGE_HEIGHT_CACHE
+                .get(&cache_key)
+                .map(|(_, h)| h)
+                .unwrap_or(5)
+        }
         Block::Html { content, .. } => content.lines().count() as u32,
     }
 }
@@ -109,19 +115,27 @@ fn ScrollIntoViewContainer(
                             let block_bottom = r.bottom;
 
                             let viewport_h = scroll_ref.read().viewport_height() as i32;
+                            let content_h = scroll_ref.read().content_height() as i32;
+                            let scroll_off = scroll_ref.read().scroll_offset();
                             let viewport_top = 1; // offset for top border
                             let viewport_bottom = viewport_top + viewport_h;
+                            let max_offset = (content_h - viewport_h).max(0);
 
                             if block_top < viewport_top {
                                 let diff = viewport_top - block_top;
                                 scroll_ref.write().scroll_by(-diff);
                             } else if block_bottom > viewport_bottom {
-                                let diff = block_bottom - viewport_bottom;
-                                if (r.bottom - r.top) <= viewport_h {
-                                    scroll_ref.write().scroll_by(diff);
-                                } else {
-                                    let top_diff = block_top - viewport_top;
-                                    scroll_ref.write().scroll_by(top_diff);
+                                // Don't scroll down if we're already at or near the
+                                // bottom of the content — this prevents the viewport
+                                // from jumping when at the end of the document.
+                                if scroll_off < max_offset {
+                                    let diff = block_bottom - viewport_bottom;
+                                    if (r.bottom - r.top) <= viewport_h {
+                                        scroll_ref.write().scroll_by(diff);
+                                    } else {
+                                        let top_diff = block_top - viewport_top;
+                                        scroll_ref.write().scroll_by(top_diff);
+                                    }
                                 }
                             }
                             needs_scroll.set(false);
@@ -202,7 +216,12 @@ pub fn BlocksRenderer(
     let block_counts = props.blocks.len();
 
     // Cache cumulative block heights and start offsets — only recompute when blocks change
-    let cum_key = format!("{}:{}", block_counts, vw.unwrap_or(0));
+    let cum_key = format!(
+        "{}:{}:{}",
+        block_counts,
+        vw.unwrap_or(0),
+        IMAGE_HEIGHT_CACHE.generation()
+    );
     let mut cum_data = hooks.use_ref(|| (Vec::<u32>::new(), Vec::<usize>::new()));
     let mut cum_key_ref = hooks.use_ref(String::new);
     if *cum_key_ref.read() != cum_key {

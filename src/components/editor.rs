@@ -423,7 +423,6 @@ pub struct EditorState {
     pub row: usize,
     pub col: usize,
     pub col_want: usize,
-    pub scroll: usize,
     pub mode: Mode,
     pub cmd_buf: String,
     pub count_buf: String,
@@ -451,7 +450,6 @@ impl EditorState {
             row: 0,
             col: 0,
             col_want: 0,
-            scroll: 0,
             mode: Mode::Normal,
             cmd_buf: String::new(),
             count_buf: String::new(),
@@ -549,15 +547,6 @@ impl EditorState {
         }
         offset += self.buf.byte_offset(row, col);
         offset
-    }
-
-    fn scroll_to_cursor(&mut self) {
-        if self.row < self.scroll {
-            self.scroll = self.row;
-        }
-        if self.view_height > 0 && self.row >= self.scroll + self.view_height {
-            self.scroll = self.row + 1 - self.view_height;
-        }
     }
 
     fn yank(&mut self, reg: char, text: String) {
@@ -3200,17 +3189,6 @@ mod tests {
         assert_eq!(s.col, 0);
         assert_eq!(s.mode, Mode::Normal);
         assert_eq!(s.modified, false);
-        assert_eq!(s.scroll, 0);
-    }
-
-    #[test]
-    fn scroll_to_cursor_basic() {
-        let mut s = ed(&"line\n".repeat(50));
-        s.view_height = 10;
-        s.row = 15;
-        s.scroll_to_cursor();
-        assert!(s.scroll <= s.row);
-        assert!(s.row < s.scroll + s.view_height);
     }
 
     #[test]
