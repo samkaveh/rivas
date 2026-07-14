@@ -1,3 +1,4 @@
+use crate::debug;
 use crate::output::kitty;
 use crate::theme;
 use crate::{
@@ -197,6 +198,19 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
+
+                        debug::log_event(&debug::DebugEvent::KittyTransmit {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            cols: vis_cols as u32,
+                            rows: vis_rows as u32,
+                            crop_x: 0,
+                            crop_y: src_y_px,
+                            crop_w: crop_w_px,
+                            crop_h: crop_h_px,
+                            data_size: data.len(),
+                            has_animation: !frames.is_empty(),
+                        });
                     }
                     IoCmd::Place {
                         id,
@@ -232,11 +246,27 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
+
+                        debug::log_event(&debug::DebugEvent::KittyPlace {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            cols: vis_cols as u32,
+                            rows: vis_rows as u32,
+                            crop_x: 0,
+                            crop_y: src_y_px,
+                            crop_w: crop_w_px,
+                            crop_h: crop_h_px,
+                        });
                     }
                     IoCmd::Detach(id) => {
                         if id != 0 {
                             kitty::delete_placements(&mut stdout, id);
                             stdout.flush().unwrap();
+                            debug::log_event(&debug::DebugEvent::KittyDelete {
+                                ts: debug::elapsed_ms(),
+                                id,
+                                scope: "placements".into(),
+                            });
                         }
                     }
                     IoCmd::Free(id) => {
@@ -244,6 +274,11 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                             kitty::delete_image(&mut stdout, id);
                             stdout.flush().unwrap();
                             last_id = 0;
+                            debug::log_event(&debug::DebugEvent::KittyDelete {
+                                ts: debug::elapsed_ms(),
+                                id,
+                                scope: "image".into(),
+                            });
                         }
                     }
                 }
@@ -348,6 +383,16 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                     rows.set(rows_);
                     IMAGE_HEIGHT_CACHE.set(&key, cols_, rows_);
 
+                    debug::log_event(&debug::DebugEvent::ImageLoad {
+                        ts: debug::elapsed_ms(),
+                        url: url.clone(),
+                        pixel_w: img_w,
+                        pixel_h: img_h,
+                        cell_cols: cols_,
+                        cell_rows: rows_,
+                        load_ms: 0,
+                    });
+
                     drawn_at.set((-1, -1));
                 }
                 Err(err_str) => {
@@ -406,6 +451,15 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                             cell_h: caps.cell_h_px as u32,
                         });
                         transmitted.set(true);
+                        debug::log_event(&debug::DebugEvent::ImagePlace {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            x,
+                            y: render_y,
+                            cols: visible_cols,
+                            rows: actual_vis_rows,
+                            src_y_offset: top_clip_rows,
+                        });
                     } else {
                         let _ = tx.send(IoCmd::Place {
                             id,
@@ -417,6 +471,15 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                             cell_w: caps.cell_w_px as u32,
                             cell_h: caps.cell_h_px as u32,
                         });
+                        debug::log_event(&debug::DebugEvent::ImagePlace {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            x,
+                            y: render_y,
+                            cols: visible_cols,
+                            rows: actual_vis_rows,
+                            src_y_offset: top_clip_rows,
+                        });
                     }
                 }
             } else if !visible && *transmitted.read() {
@@ -425,6 +488,11 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                     if let Some(ref tx) = *io_tx.read() {
                         let _ = tx.send(IoCmd::Detach(id));
                     }
+                    debug::log_event(&debug::DebugEvent::ImageDetach {
+                        ts: debug::elapsed_ms(),
+                        id,
+                        reason: "scrolled_offscreen".into(),
+                    });
                 }
             }
         }
@@ -439,5 +507,27 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         .into_any();
     }
 
-    element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+    if debug::is_enabled() {
+        let img_cols = cols.read().clone();
+        let img_rows = rows.read().clone();
+        let url_display: String = url.chars().take(24).collect();
+        element! {
+            View(
+                width: img_cols.max(1),
+                height: img_rows.max(1),
+                border_style: BorderStyle::Single,
+                border_color: theme::DBG_IMAGE,
+                background_color: theme::DBG_BG,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+            ) {
+                Text(content: format!("IMG {}x{}", img_cols, img_rows), color: theme::DBG_IMAGE, weight: Weight::Bold)
+                Text(content: url_display, color: theme::COMMENT)
+            }
+        }
+        .into_any()
+    } else {
+        element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+    }
 }

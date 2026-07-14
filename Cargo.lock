@@ -3854,7 +3854,7 @@ dependencies = [
 
 [[package]]
 name = "rivas"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3871,6 +3871,8 @@ dependencies = [
  "regex",
  "resvg 0.47.0",
  "selkie-rs",
+ "serde",
+ "serde_json",
  "skim",
  "smol",
  "syntect",

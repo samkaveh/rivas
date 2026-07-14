@@ -4,6 +4,7 @@ use iocraft::prelude::*;
 
 use crate::components::blocks_renderer::BlocksRenderer;
 use crate::components::editor::{Buffer, EditorState, Mode, handle_key};
+use crate::debug;
 use crate::document::cache::ParseCache;
 use crate::document::parser::parse_markdown;
 use crate::theme;
@@ -17,6 +18,7 @@ pub struct DocumentProps {
     pub keyboard_navigation: Option<bool>,
     pub follow_ref: Option<Ref<usize>>,
     pub cursor_offset: Option<Ref<usize>>,
+    pub debug: bool,
     pub on_change: Handler<String>,
     pub on_quit: Handler<()>,
 }
@@ -153,6 +155,8 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             let page = viewport_height.max(1);
             let half_page = (page / 2).max(1);
 
+            let old_scroll = scroll_handle.read().scroll_offset();
+
             match code {
                 KeyCode::Char('g') if !ctrl && pending_g.get() => {
                     scroll_handle.write().scroll_to_top();
@@ -201,6 +205,15 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     pending_g.set(false);
                 }
             }
+
+            let new_scroll = scroll_handle.read().scroll_offset();
+            if old_scroll != new_scroll {
+                debug::log_event(&debug::DebugEvent::Scroll {
+                    ts: debug::elapsed_ms(),
+                    old: old_scroll,
+                    new: new_scroll,
+                });
+            }
         }
     });
 
@@ -226,6 +239,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         cursor_offset: props.cursor_offset.clone(),
                         editor_state: Some(editor_state.clone()),
                         scroll_handle: Some(scroll_handle.clone()),
+                        debug: props.debug,
                     )
                     }
                 }

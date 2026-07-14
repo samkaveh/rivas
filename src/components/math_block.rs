@@ -1,4 +1,5 @@
 use crate::components::image::IMAGE_HEIGHT_CACHE;
+use crate::debug;
 use crate::theme;
 use crate::{
     assets::math::render_math,
@@ -128,6 +129,19 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
 
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
+
+                        debug::log_event(&debug::DebugEvent::KittyTransmit {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            cols: vis_cols as u32,
+                            rows: vis_rows as u32,
+                            crop_x: 0,
+                            crop_y: src_y_px,
+                            crop_w: crop_w_px,
+                            crop_h: crop_h_px,
+                            data_size: data.len(),
+                            has_animation: false,
+                        });
                     }
                     MathCmd::Place {
                         id,
@@ -163,11 +177,27 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
 
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
+
+                        debug::log_event(&debug::DebugEvent::KittyPlace {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            cols: vis_cols as u32,
+                            rows: vis_rows as u32,
+                            crop_x: 0,
+                            crop_y: src_y_px,
+                            crop_w: crop_w_px,
+                            crop_h: crop_h_px,
+                        });
                     }
                     MathCmd::Detach(id) => {
                         if id != 0 {
                             kitty::delete_placements(&mut stdout, id);
                             stdout.flush().unwrap();
+                            debug::log_event(&debug::DebugEvent::KittyDelete {
+                                ts: debug::elapsed_ms(),
+                                id,
+                                scope: "placements".into(),
+                            });
                         }
                     }
                     MathCmd::Free(id) => {
@@ -175,6 +205,11 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
                             kitty::delete_image(&mut stdout, id);
                             stdout.flush().unwrap();
                             last_id = 0;
+                            debug::log_event(&debug::DebugEvent::KittyDelete {
+                                ts: debug::elapsed_ms(),
+                                id,
+                                scope: "image".into(),
+                            });
                         }
                     }
                 }
@@ -333,5 +368,26 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
         .into_any();
     }
 
-    element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+    if debug::is_enabled() {
+        let m_cols = cols.read().clone().max(8);
+        let m_rows = rows.read().clone().max(3);
+        let label = if props.display { "Math (display)" } else { "Math (inline)" };
+        element! {
+            View(
+                width: m_cols,
+                height: m_rows,
+                border_style: BorderStyle::Single,
+                border_color: theme::DBG_MATH,
+                background_color: theme::DBG_BG,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+            ) {
+                Text(content: format!("{} {}x{}", label, m_cols, m_rows), color: theme::DBG_MATH, weight: Weight::Bold)
+            }
+        }
+        .into_any()
+    } else {
+        element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+    }
 }

@@ -7,6 +7,7 @@ use std::io::{IsTerminal, Read, Write, stdin};
 use std::path::PathBuf;
 mod assets;
 mod components;
+mod debug;
 mod document;
 mod lib_file_cache;
 mod output;
@@ -38,11 +39,15 @@ struct Cli {
     /// Open a side-by-side markdown editor and live preview.
     #[arg(short, long)]
     edit: bool,
+    /// Enable debug mode: visual overlay boxes + JSONL log to rivas-debug.jsonl
+    #[arg(long)]
+    debug: bool,
 }
 
 fn main() -> Result<()> {
     env_logger::init();
     let cli = Cli::parse();
+    debug::init(cli.debug);
 
     let (mut content, mut file_path) = match &cli.file {
         // CASE 1: User provided a path
@@ -93,6 +98,7 @@ fn main() -> Result<()> {
                 file_path: file_path.clone(),
                 content: content.as_str(),
                 action: action.clone(),
+                debug: cli.debug,
             ))
             .fullscreen(),
         )?;
@@ -127,6 +133,7 @@ struct AppProps<'a> {
     file_path: Option<PathBuf>,
     content: &'a str,
     action: Arc<Mutex<AppAction>>,
+    debug: bool,
 }
 
 #[component]
@@ -198,6 +205,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 keyboard_navigation: Some(true),
                 follow_ref: None,
                 cursor_offset: Some(cursor_offset),
+                debug: props.debug,
                 on_change,
                 on_quit,
             )
