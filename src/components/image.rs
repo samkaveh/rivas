@@ -16,6 +16,14 @@ use std::{
     },
 };
 
+/// Global generation counter. Incremented when the help overlay closes to
+/// force all Kitty image components to re-render (re-transmit + re-place).
+pub static KITTY_REDRAW_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn bump_kitty_redraw_generation() {
+    KITTY_REDRAW_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Global cache of actual image dimensions (cols, rows) keyed by "vw:url".
 /// Lets the virtual-scrolling height estimator use real heights instead of
 /// guessing, preventing layout instability when images scroll off-screen.
@@ -136,6 +144,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         ))
     });
     let mut transmitted = hooks.use_ref(|| false);
+    let mut last_redraw_gen = hooks.use_ref(|| KITTY_REDRAW_GENERATION.load(Ordering::Relaxed));
     let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
     let io_tx = hooks.use_ref(|| {
         let (tx, rx) = mpsc::channel::<IoCmd>();
@@ -361,6 +370,15 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         }
     }
 
+    // When the help overlay closes, the global redraw generation increments.
+    // Reset drawn_at and transmitted so the image is re-placed (or re-transmitted).
+    let cur_gen = KITTY_REDRAW_GENERATION.load(Ordering::Relaxed);
+    if cur_gen != *last_redraw_gen.read() {
+        last_redraw_gen.set(cur_gen);
+        drawn_at.set((-1, -1));
+        transmitted.set(false);
+    }
+
     if let Some(r) = rect {
         let pos = (r.left, r.top);
         if pos != drawn_at.get() {
@@ -372,7 +390,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
             let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
             let actual_vis_rows = (visible_rows - top_clip_rows).max(0);

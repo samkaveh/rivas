@@ -1,8 +1,8 @@
-use crate::components::image::IMAGE_HEIGHT_CACHE;
+use crate::components::image::{IMAGE_HEIGHT_CACHE, KITTY_REDRAW_GENERATION};
 use crate::theme;
 use iocraft::prelude::*;
 use std::io::Write;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
 
 use crate::{
     assets::mermaid::render_mermaid_to_png,
@@ -77,6 +77,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
     let mut load_result =
         hooks.use_ref(|| Arc::new(Mutex::new(None::<Result<(Vec<u8>, u32, u32), String>>)));
     let mut transmitted = hooks.use_ref(|| false);
+    let mut last_redraw_gen = hooks.use_ref(|| KITTY_REDRAW_GENERATION.load(Ordering::Relaxed));
     let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
     let io_tx = hooks.use_ref(|| {
         let (tx, rx) = mpsc::channel::<MermaidCmd>();
@@ -253,6 +254,13 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         }
     }
 
+    let cur_gen = KITTY_REDRAW_GENERATION.load(Ordering::Relaxed);
+    if cur_gen != *last_redraw_gen.read() {
+        last_redraw_gen.set(cur_gen);
+        drawn_at.set((-1, -1));
+        transmitted.set(false);
+    }
+
     if let Some(r) = rect {
         let pos = (r.left, r.top);
         if pos != drawn_at.get() {
@@ -264,7 +272,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
             // How many rows are scrolled off the top
             let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };

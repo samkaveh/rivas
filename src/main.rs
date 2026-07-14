@@ -13,6 +13,8 @@ mod output;
 mod theme;
 
 use crate::components::document::Document;
+use crate::components::help_overlay::HelpOverlay;
+use crate::components::image::bump_kitty_redraw_generation;
 use crate::lib_file_cache::FileListCache;
 use skim::prelude::{Skim, SkimItemReader, SkimOptionsBuilder};
 use std::sync::{Arc, Mutex};
@@ -143,10 +145,13 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let content = hooks.use_state(|| props.content.to_string());
     let mouse_captured = hooks.use_state(|| false);
     let cursor_offset = hooks.use_ref(|| 0usize);
+    let show_help = hooks.use_state(|| false);
+    let mut prev_show_help = hooks.use_ref(|| false);
 
     hooks.use_terminal_events({
         let mut should_exit = should_exit;
         let action = props.action.clone();
+        let mut show_help = show_help.clone();
         move |event| match event {
             TerminalEvent::Key(KeyEvent {
                 code,
@@ -158,11 +163,31 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 if ctrl && code == KeyCode::Char('p') {
                     *action.lock().unwrap() = AppAction::SearchFile;
                     should_exit.set(true);
+                } else if code == KeyCode::F(1) {
+                    show_help.set(!show_help.get());
+                } else if code == KeyCode::Esc && show_help.get() {
+                    show_help.set(false);
                 }
             }
             _ => {}
         }
     });
+
+    // Detect show_help transitions: clear kitty images on open, redraw on close
+    let cur_help = show_help.get();
+    let prev_help = *prev_show_help.read();
+    if cur_help != prev_help {
+        prev_show_help.set(cur_help);
+        if kitty::is_supported() {
+            let mut stdout = std::io::stdout().lock();
+            if cur_help {
+                kitty::delete_all(&mut stdout);
+            } else {
+                bump_kitty_redraw_generation();
+            }
+            let _ = stdout.flush();
+        }
+    }
 
     if should_exit.get() {
         if kitty::is_supported() {
@@ -190,36 +215,52 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
 
     element! {
         View(flex_direction: FlexDirection::Column, width, height) {
-            Document(
-                content: current_content,
-                file_path: path,
-                viewport_height: height.saturating_sub(1) as u32,
-                viewport_width: width as u32,
-                keyboard_navigation: Some(true),
-                follow_ref: None,
-                cursor_offset: Some(cursor_offset),
-                on_change,
-                on_quit,
-            )
-            View(width: 100pct, height: 1, background_color: theme::STATUS_BG, flex_direction: FlexDirection::Row) {
-                View(background_color: theme::DARK_GREY) {
-                    Text(content: " :q ", color: theme::FG)
+            #(if show_help.get() {
+                element! {
+                    View(width, height) {
+                        HelpOverlay()
+                    }
                 }
-                Text(content: " Quit ")
-                View(background_color: theme::DARK_GREY) {
-                    Text(content: " C-p ", color: theme::FG)
+            } else {
+                element! {
+                    View(flex_direction: FlexDirection::Column, width, height) {
+                        Document(
+                            content: current_content,
+                            file_path: path,
+                            viewport_height: height.saturating_sub(1) as u32,
+                            viewport_width: width as u32,
+                            keyboard_navigation: Some(true),
+                            follow_ref: None,
+                            cursor_offset: Some(cursor_offset),
+                            on_change,
+                            on_quit,
+                        )
+                        View(width: 100pct, height: 1, background_color: theme::STATUS_BG, flex_direction: FlexDirection::Row) {
+                            View(background_color: theme::DARK_GREY) {
+                                Text(content: " :q ", color: theme::FG)
+                            }
+                            Text(content: " Quit ")
+                            View(background_color: theme::DARK_GREY) {
+                                Text(content: " C-p ", color: theme::FG)
+                            }
+                            Text(content: " Find ")
+                            View(background_color: theme::DARK_GREY) {
+                                Text(content: " j/k ", color: theme::FG)
+                            }
+                            Text(content: " Scroll ")
+                            View(background_color: theme::DARK_GREY) {
+                                Text(content: " gg/G ", color: theme::FG)
+                            }
+                            Text(content: " Top/Bottom ")
+                            View(flex_grow: 1.0) {}
+                            View(background_color: theme::DARK_GREY) {
+                                Text(content: " F1 ", color: theme::FG)
+                            }
+                            Text(content: " Help ")
+                        }
+                    }
                 }
-                Text(content: " Find ")
-                View(background_color: theme::DARK_GREY) {
-                    Text(content: " j/k ", color: theme::FG)
-                }
-                Text(content: " Scroll ")
-                View(background_color: theme::DARK_GREY) {
-                    Text(content: " gg/G ", color: theme::FG)
-                }
-                Text(content: " Top/Bottom ")
-                View(flex_grow: 1.0) {}
-            }
+            })
         }
     }
 }

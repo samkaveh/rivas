@@ -3,6 +3,7 @@ pub mod code_block;
 pub mod document;
 pub mod editor;
 pub mod heading;
+pub mod help_overlay;
 pub mod html_block;
 pub mod image;
 pub mod inline_renderer;
