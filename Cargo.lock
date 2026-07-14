@@ -3871,6 +3871,8 @@ dependencies = [
  "regex",
  "resvg 0.47.0",
  "selkie-rs",
+ "serde",
+ "serde_json",
  "skim",
  "smol",
  "syntect",

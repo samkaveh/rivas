@@ -1,4 +1,5 @@
 use crate::components::image::IMAGE_HEIGHT_CACHE;
+use crate::debug;
 use crate::theme;
 use iocraft::prelude::*;
 use std::io::Write;
@@ -127,6 +128,19 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
+
+                        debug::log_event(&debug::DebugEvent::KittyTransmit {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            cols: vis_cols as u32,
+                            rows: vis_rows as u32,
+                            crop_x: 0,
+                            crop_y: src_y_px,
+                            crop_w: crop_w_px,
+                            crop_h: crop_h_px,
+                            data_size: data.len(),
+                            has_animation: false,
+                        });
                     }
                     MermaidCmd::Place {
                         id,
@@ -162,11 +176,27 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
                         write!(stdout, "\x1b8").unwrap();
                         stdout.flush().unwrap();
+
+                        debug::log_event(&debug::DebugEvent::KittyPlace {
+                            ts: debug::elapsed_ms(),
+                            id,
+                            cols: vis_cols as u32,
+                            rows: vis_rows as u32,
+                            crop_x: 0,
+                            crop_y: src_y_px,
+                            crop_w: crop_w_px,
+                            crop_h: crop_h_px,
+                        });
                     }
                     MermaidCmd::Detach(id) => {
                         if id != 0 {
                             kitty::delete_placements(&mut stdout, id);
                             stdout.flush().unwrap();
+                            debug::log_event(&debug::DebugEvent::KittyDelete {
+                                ts: debug::elapsed_ms(),
+                                id,
+                                scope: "placements".into(),
+                            });
                         }
                     }
                     MermaidCmd::Free(id) => {
@@ -174,6 +204,11 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
                             kitty::delete_image(&mut stdout, id);
                             stdout.flush().unwrap();
                             last_id = 0;
+                            debug::log_event(&debug::DebugEvent::KittyDelete {
+                                ts: debug::elapsed_ms(),
+                                id,
+                                scope: "image".into(),
+                            });
                         }
                     }
                 }
@@ -330,5 +365,25 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         .into_any();
     }
 
-    element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+    if debug::is_enabled() {
+        let m_cols = cols.read().clone().max(10);
+        let m_rows = rows.read().clone().max(5);
+        element! {
+            View(
+                width: m_cols,
+                height: m_rows,
+                border_style: BorderStyle::Single,
+                border_color: theme::DBG_MERMAID,
+                background_color: theme::DBG_BG,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+            ) {
+                Text(content: format!("Mermaid {}x{}", m_cols, m_rows), color: theme::DBG_MERMAID, weight: Weight::Bold)
+            }
+        }
+        .into_any()
+    } else {
+        element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+    }
 }

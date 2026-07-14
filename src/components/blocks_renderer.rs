@@ -10,6 +10,7 @@ use crate::components::paragraph::Paragraph;
 use crate::components::quote_block::QuoteBlock;
 use crate::components::table_block::TableBlock;
 use crate::components::thematic_break::ThematicBreak;
+use crate::debug;
 use crate::document::model::{Block, inlines_to_text};
 use crate::theme;
 use iocraft::prelude::*;
@@ -165,6 +166,7 @@ pub struct BlocksRendererProps {
     pub cursor_offset: Option<Ref<usize>>,
     pub editor_state: Option<Ref<Option<EditorState>>>,
     pub scroll_handle: Option<Ref<ScrollViewHandle>>,
+    pub debug: bool,
 }
 
 #[component]
@@ -262,6 +264,30 @@ pub fn BlocksRenderer(
 
     let first_visible = first_visible.min(cursor_block_idx);
     let last_visible = last_visible.max(cursor_block_idx + 1);
+
+    // Log render tick for debug
+    if props.debug {
+        if let Some(state_ref) = &props.editor_state {
+            let s_opt = state_ref.read();
+            if let Some(s) = s_opt.as_ref() {
+                debug::log_event(&debug::DebugEvent::RenderTick {
+                    ts: debug::elapsed_ms(),
+                    cursor: debug::CursorPos {
+                        byte: s.absolute_byte_offset(),
+                        row: s.row,
+                        col: s.col,
+                    },
+                    scroll: props.scroll_offset.unwrap_or(0),
+                    viewport: debug::ViewportInfo {
+                        w: vw.unwrap_or(80),
+                        h: vh.unwrap_or(24),
+                    },
+                    blocks: block_counts,
+                    mode: format!("{:?}", s.mode),
+                });
+            }
+        }
+    }
 
     element! {
         View(flex_direction: FlexDirection::Column) {
@@ -540,6 +566,44 @@ pub fn BlocksRenderer(
                         Block::ThematicBreak{..} => element!{ThematicBreak()}.into_any(),
                         Block::Image { alt, url, title, .. } => element!{Image(url: url.clone(), file_path: file_path.clone(), title: title.clone(), alt: Some(alt.clone()), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::Html { content, .. } => element!{HtmlBlock(content: content.clone())}.into_any(),
+                    };
+
+                    // Wrap with debug border/label if debug mode is on
+                    let rendered = if props.debug {
+                        let (label, color) = match block {
+                            Block::Heading { .. } => ("H".to_string(), theme::DBG_HEADING),
+                            Block::Paragraph { .. } => ("P".to_string(), theme::DBG_PARAGRAPH),
+                            Block::Code { .. } => ("Code".to_string(), theme::DBG_CODE),
+                            Block::Image { .. } => ("Img".to_string(), theme::DBG_IMAGE),
+                            Block::Math { .. } => ("Math".to_string(), theme::DBG_MATH),
+                            Block::Mermaid { .. } => ("Mermaid".to_string(), theme::DBG_MERMAID),
+                            Block::Quote { .. } => (">".to_string(), theme::DBG_QUOTE),
+                            Block::Table { .. } => ("Table".to_string(), theme::DBG_TABLE),
+                            Block::List { .. } => ("List".to_string(), theme::DBG_LIST),
+                            Block::ThematicBreak { .. } => ("---".to_string(), theme::DBG_BREAK),
+                            Block::Html { .. } => ("HTML".to_string(), theme::DBG_HTML),
+                        };
+                        let est_h = estimate_block_height(block, &props.content, vw);
+                        debug::log_event(&debug::DebugEvent::BlockLayout {
+                            ts: debug::elapsed_ms(),
+                            idx: i,
+                            block_type: label.clone(),
+                            span_start: span.0,
+                            span_end: span.1,
+                            est_height: est_h,
+                        });
+                        element! {
+                            View(flex_direction: FlexDirection::Column) {
+                                View(flex_direction: FlexDirection::Row, background_color: color, padding_left: 1) {
+                                    Text(content: format!("[{} {}..{} h={}]", label, span.0, span.1, est_h), color: theme::DARK_BG, weight: Weight::Bold)
+                                }
+                                View(border_style: BorderStyle::Single, border_color: color, background_color: theme::DBG_BG) {
+                                    #(Some(rendered).into_iter())
+                                }
+                            }
+                        }.into_any()
+                    } else {
+                        rendered
                     };
 
                     if is_cursor_here && !is_editing_mode {

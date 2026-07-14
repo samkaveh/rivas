@@ -83,3 +83,21 @@ pub const VIEWPORT_INNER_PADDING: u32 = 4;
 pub const BLOCK_PADDING: u32 = 4;
 pub const TOTAL_VIEWPORT_OFFSET: u32 =
     VIEWPORT_BORDER_WIDTH + VIEWPORT_SCROLLBAR_WIDTH + VIEWPORT_INNER_PADDING + BLOCK_PADDING;
+
+// ── Debug overlay colors ──────────────────────────────────────────────────────
+pub const DBG_HEADING: Color = BLUE;
+pub const DBG_PARAGRAPH: Color = FG;
+pub const DBG_CODE: Color = GREEN;
+pub const DBG_IMAGE: Color = ORANGE;
+pub const DBG_MATH: Color = MAGENTA;
+pub const DBG_MERMAID: Color = CYAN;
+pub const DBG_QUOTE: Color = YELLOW;
+pub const DBG_TABLE: Color = TEAL;
+pub const DBG_LIST: Color = GREEN;
+pub const DBG_BREAK: Color = COMMENT;
+pub const DBG_HTML: Color = RED;
+pub const DBG_BG: Color = Color::Rgb {
+    r: 35,
+    g: 28,
+    b: 18,
+}; // warm dark overlay bg
