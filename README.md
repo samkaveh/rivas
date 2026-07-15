@@ -1,4 +1,4 @@
-![rivas logo](./Rivas_logo.jpg)
+![rivas logo](./Rivas_logo.png)
 
 # Rivas
 
@@ -19,7 +19,7 @@ protocol.
 - Vim-style source editing with a side-by-side live preview.
 - Vim-style keyboard navigation in the rendered viewer.
 
-![demo of rivas features](./rivas_demo.gif)
+![demo of rivas features](./rivas_demo_short.gif)
 
 ## Requirements
 
