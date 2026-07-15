@@ -150,60 +150,72 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 tick.set(tick.get().wrapping_add(1));
             }
 
-            // Scroll and Navigation logic
+            // Scroll and Navigation logic (Normal and Visual modes only)
             let viewport_height = scroll_handle.read().viewport_height() as i32;
             let page = viewport_height.max(1);
             let half_page = (page / 2).max(1);
 
             let old_scroll = scroll_handle.read().scroll_offset();
 
-            match code {
-                KeyCode::Char('g') if !ctrl && pending_g.get() => {
-                    scroll_handle.write().scroll_to_top();
-                    pending_g.set(false);
+            let current_mode = editor_state
+                .read()
+                .as_ref()
+                .map(|s| s.mode.clone())
+                .unwrap_or(Mode::Normal);
+            if !matches!(
+                current_mode,
+                Mode::Insert | Mode::Command | Mode::Search { .. }
+            ) {
+                match code {
+                    KeyCode::Char('g') if !ctrl && pending_g.get() => {
+                        scroll_handle.write().scroll_to_top();
+                        pending_g.set(false);
+                    }
+                    KeyCode::Char('g') if !ctrl => {
+                        pending_g.set(true);
+                    }
+                    KeyCode::Char('G') if !ctrl => {
+                        scroll_handle.write().scroll_to_bottom();
+                        pending_g.set(false);
+                    }
+                    KeyCode::End => {
+                        scroll_handle.write().scroll_to_bottom();
+                        pending_g.set(false);
+                    }
+                    KeyCode::Char('d') if ctrl => {
+                        scroll_handle.write().scroll_by(half_page);
+                        pending_g.set(false);
+                    }
+                    KeyCode::Char('u') if ctrl => {
+                        scroll_handle.write().scroll_by(-half_page);
+                        pending_g.set(false);
+                    }
+                    KeyCode::Char('f') if ctrl => {
+                        scroll_handle.write().scroll_by(page);
+                        pending_g.set(false);
+                    }
+                    KeyCode::PageDown => {
+                        scroll_handle.write().scroll_by(page);
+                        pending_g.set(false);
+                    }
+                    KeyCode::Char('b') if ctrl => {
+                        scroll_handle.write().scroll_by(-page);
+                        pending_g.set(false);
+                    }
+                    KeyCode::PageUp => {
+                        scroll_handle.write().scroll_by(-page);
+                        pending_g.set(false);
+                    }
+                    KeyCode::Home => {
+                        scroll_handle.write().scroll_to_top();
+                        pending_g.set(false);
+                    }
+                    _ => {
+                        pending_g.set(false);
+                    }
                 }
-                KeyCode::Char('g') if !ctrl => {
-                    pending_g.set(true);
-                }
-                KeyCode::Char('G') if !ctrl => {
-                    scroll_handle.write().scroll_to_bottom();
-                    pending_g.set(false);
-                }
-                KeyCode::End => {
-                    scroll_handle.write().scroll_to_bottom();
-                    pending_g.set(false);
-                }
-                KeyCode::Char('d') if ctrl => {
-                    scroll_handle.write().scroll_by(half_page);
-                    pending_g.set(false);
-                }
-                KeyCode::Char('u') if ctrl => {
-                    scroll_handle.write().scroll_by(-half_page);
-                    pending_g.set(false);
-                }
-                KeyCode::Char('f') if ctrl => {
-                    scroll_handle.write().scroll_by(page);
-                    pending_g.set(false);
-                }
-                KeyCode::PageDown => {
-                    scroll_handle.write().scroll_by(page);
-                    pending_g.set(false);
-                }
-                KeyCode::Char('b') if ctrl => {
-                    scroll_handle.write().scroll_by(-page);
-                    pending_g.set(false);
-                }
-                KeyCode::PageUp => {
-                    scroll_handle.write().scroll_by(-page);
-                    pending_g.set(false);
-                }
-                KeyCode::Home => {
-                    scroll_handle.write().scroll_to_top();
-                    pending_g.set(false);
-                }
-                _ => {
-                    pending_g.set(false);
-                }
+            } else {
+                pending_g.set(false);
             }
 
             let new_scroll = scroll_handle.read().scroll_offset();

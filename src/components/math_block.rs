@@ -371,7 +371,11 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     if debug::is_enabled() {
         let m_cols = cols.read().clone().max(8);
         let m_rows = rows.read().clone().max(3);
-        let label = if props.display { "Math (display)" } else { "Math (inline)" };
+        let label = if props.display {
+            "Math (display)"
+        } else {
+            "Math (inline)"
+        };
         element! {
             View(
                 width: m_cols,
