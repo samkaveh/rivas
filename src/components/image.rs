@@ -1,84 +1,19 @@
 use crate::debug;
-use crate::output::kitty;
+use crate::output::graphics_manager::{
+    GfxRect, GfxSource, ReleaseGuard, acquire, detach, dims, gfx_error, place, release,
+};
 use crate::theme;
-use crate::{
-    assets::images::{ImageData, load_image},
-    output::capabilities::TermCaps,
-};
 use iocraft::prelude::*;
-use std::{
-    collections::HashMap,
-    io::Write,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
-};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
-/// Global cache of actual image dimensions (cols, rows) keyed by "vw:url".
-/// Lets the virtual-scrolling height estimator use real heights instead of
-/// guessing, preventing layout instability when images scroll off-screen.
-pub struct ImageHeightCache {
-    heights: RwLock<HashMap<String, (u32, u32)>>,
-    generation: AtomicU64,
-}
-
-impl ImageHeightCache {
-    pub fn new() -> Self {
-        Self {
-            heights: RwLock::new(HashMap::new()),
-            generation: AtomicU64::new(0),
-        }
-    }
-
-    pub fn get(&self, key: &str) -> Option<(u32, u32)> {
-        self.heights.read().unwrap().get(key).copied()
-    }
-
-    pub fn set(&self, key: &str, cols: u32, rows: u32) {
-        let mut map = self.heights.write().unwrap();
-        if map.get(key).copied() != Some((cols, rows)) {
-            map.insert(key.to_string(), (cols, rows));
-            self.generation.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Relaxed)
-    }
-}
-
-lazy_static::lazy_static! {
-    pub static ref IMAGE_HEIGHT_CACHE: ImageHeightCache = ImageHeightCache::new();
-}
-
-enum IoCmd {
-    Render {
-        id: u32,
-        data: Arc<String>,
-        frames: Vec<(Arc<String>, u32)>,
-        x: i32,
-        y: i32,
-        vis_cols: i32,
-        vis_rows: i32,
-        src_y_offset: i32,
-        cell_w: u32,
-        cell_h: u32,
-    },
-    Place {
-        id: u32,
-        x: i32,
-        y: i32,
-        vis_cols: i32,
-        vis_rows: i32,
-        src_y_offset: i32,
-        cell_w: u32,
-        cell_h: u32,
-    },
-    Detach(u32),
-    Free(u32),
+/// Unique id generator for graphics components. Each occurrence of an image or
+/// math formula gets its own terminal graphic id so that placing/detaching one
+/// occurrence never affects another that happens to share the same content.
+static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+fn next_instance_id() -> u64 {
+    INSTANCE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 #[derive(Default, Props)]
@@ -115,294 +50,73 @@ pub struct KittyImageProps {
 
 #[component]
 pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
-    let url = &props.url;
     let vw = props.viewport_width.unwrap_or(100);
-    let key = format!("{}:{}", vw, url);
-    let (cached_cols, cached_rows) = IMAGE_HEIGHT_CACHE.get(&key).unwrap_or((0, 0));
+    let vh = props.viewport_height.unwrap_or(100);
+    // Unique per-occurrence key so identical images don't share a terminal
+    // graphic id (which would let one occurrence's detach/place clobber others).
+    let instance = hooks.use_ref(|| next_instance_id());
+    let key = format!("{}:{}#{}", vw, props.url, *instance.read());
+    let (cached_cols, cached_rows) = dims(&key).unwrap_or((0, 0));
 
     let rect = hooks.use_component_rect();
     let (term_width, term_height) = hooks.use_terminal_size();
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
-    let mut image_id = hooks.use_ref(|| kitty::ImageGuard::new());
-    let mut data_cache = hooks.use_ref(|| Arc::new(String::new()));
-    let mut frames_cache = hooks.use_ref(|| Vec::<(Arc<String>, u32)>::new());
-    let mut cache_key = hooks.use_ref(String::new);
     let mut cols = hooks.use_ref(|| cached_cols);
     let mut rows = hooks.use_ref(|| cached_rows);
     let mut error_msg = hooks.use_state(|| None::<String>);
-    let mut loading = hooks.use_ref(|| false);
-    let mut load_result = hooks.use_ref(|| {
-        Arc::new(Mutex::new(
-            None::<Result<(String, Vec<(String, u32)>, u32, u32), String>>,
-        ))
-    });
-    let mut transmitted = hooks.use_ref(|| false);
-    let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
-    let io_tx = hooks.use_ref(|| {
-        let (tx, rx) = mpsc::channel::<IoCmd>();
-        std::thread::spawn(move || {
-            let mut last_id = 0u32;
-            while let Ok(mut cmd) = rx.recv() {
-                // Drain stale commands — skip intermediate positions
-                // so rapid scrolling only processes the latest.
-                while let Ok(next) = rx.try_recv() {
-                    cmd = next;
-                }
-
-                let mut stdout = std::io::stdout().lock();
-                match cmd {
-                    IoCmd::Render {
-                        id,
-                        data,
-                        frames,
-                        x,
-                        y,
-                        vis_cols,
-                        vis_rows,
-                        src_y_offset,
-                        cell_w,
-                        cell_h,
-                    } => {
-                        let src_y_px = src_y_offset as u32 * cell_h;
-                        let crop_h_px = vis_rows as u32 * cell_h;
-                        let crop_w_px = vis_cols as u32 * cell_w;
-
-                        write!(stdout, "\x1b7").unwrap();
-                        write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-
-                        if last_id != 0 {
-                            kitty::delete_image(&mut stdout, last_id);
-                        }
-
-                        // a=T auto-places at cursor — placement is tracked by id
-                        kitty::write_to_cropped_encoded(
-                            &mut stdout,
-                            id,
-                            data.as_str(),
-                            vis_cols as u32,
-                            vis_rows as u32,
-                            0,
-                            src_y_px,
-                            crop_w_px,
-                            crop_h_px,
-                        );
-
-                        if !frames.is_empty() {
-                            let frames_ref: Vec<(&str, u32)> =
-                                frames.iter().map(|(s, d)| (s.as_str(), *d)).collect();
-                            kitty::write_animation_frames_encoded(&mut stdout, id, &frames_ref);
-                            kitty::start_animation(&mut stdout, id);
-                        }
-
-                        last_id = id;
-
-                        write!(stdout, "\x1b8").unwrap();
-                        stdout.flush().unwrap();
-
-                        debug::log_event(&debug::DebugEvent::KittyTransmit {
-                            ts: debug::elapsed_ms(),
-                            id,
-                            cols: vis_cols as u32,
-                            rows: vis_rows as u32,
-                            crop_x: 0,
-                            crop_y: src_y_px,
-                            crop_w: crop_w_px,
-                            crop_h: crop_h_px,
-                            data_size: data.len(),
-                            has_animation: !frames.is_empty(),
-                        });
-                    }
-                    IoCmd::Place {
-                        id,
-                        x,
-                        y,
-                        vis_cols,
-                        vis_rows,
-                        src_y_offset,
-                        cell_w,
-                        cell_h,
-                    } => {
-                        let src_y_px = src_y_offset as u32 * cell_h;
-                        let crop_h_px = vis_rows as u32 * cell_h;
-                        let crop_w_px = vis_cols as u32 * cell_w;
-
-                        write!(stdout, "\x1b7").unwrap();
-                        write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-
-                        // Delete old placement (keep data cached)
-                        kitty::delete_placements(&mut stdout, id);
-
-                        // Create fresh placement at cursor (no retransmission)
-                        kitty::place_image(
-                            &mut stdout,
-                            id,
-                            vis_cols as u32,
-                            vis_rows as u32,
-                            0,
-                            src_y_px,
-                            crop_w_px,
-                            crop_h_px,
-                        );
-
-                        write!(stdout, "\x1b8").unwrap();
-                        stdout.flush().unwrap();
-
-                        debug::log_event(&debug::DebugEvent::KittyPlace {
-                            ts: debug::elapsed_ms(),
-                            id,
-                            cols: vis_cols as u32,
-                            rows: vis_rows as u32,
-                            crop_x: 0,
-                            crop_y: src_y_px,
-                            crop_w: crop_w_px,
-                            crop_h: crop_h_px,
-                        });
-                    }
-                    IoCmd::Detach(id) => {
-                        if id != 0 {
-                            kitty::delete_placements(&mut stdout, id);
-                            stdout.flush().unwrap();
-                            debug::log_event(&debug::DebugEvent::KittyDelete {
-                                ts: debug::elapsed_ms(),
-                                id,
-                                scope: "placements".into(),
-                            });
-                        }
-                    }
-                    IoCmd::Free(id) => {
-                        if id != 0 {
-                            kitty::delete_image(&mut stdout, id);
-                            stdout.flush().unwrap();
-                            last_id = 0;
-                            debug::log_event(&debug::DebugEvent::KittyDelete {
-                                ts: debug::elapsed_ms(),
-                                id,
-                                scope: "image".into(),
-                            });
-                        }
-                    }
-                }
-            }
-        });
-        Some(tx)
-    });
+    let mut sized = hooks.use_state(|| false);
+    let mut acquired_key = hooks.use_ref(|| String::new());
+    let mut cur_key = hooks.use_ref(|| Arc::new(Mutex::new(String::new())));
+    let caps_cache = hooks.use_ref(|| crate::output::capabilities::TermCaps::detect().ok());
 
     let url = &props.url;
     let base_dir = props.file_path.parent();
-    let vw = props.viewport_width.unwrap_or(100);
-    let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("{}:{}", vw, url);
 
-    if *cache_key.read() != key {
-        cache_key.set(key.clone());
-        data_cache.set(Arc::new(String::new()));
-        frames_cache.set(Vec::new());
-        let (cached_cols, cached_rows) = IMAGE_HEIGHT_CACHE.get(&key).unwrap_or((0, 0));
-        cols.set(cached_cols);
-        rows.set(cached_rows);
-        drawn_at.set((-1, -1));
-        error_msg.set(None);
-        loading.set(false);
-        transmitted.set(false);
-        load_result.set(Arc::new(Mutex::new(None)));
+    // Acquire (or re-acquire on key change). The manager caches by `key`, so a
+    // remounted component reuses the already-transmitted terminal image.
+    if acquired_key.read().is_empty() || *acquired_key.read() != key {
+        if !acquired_key.read().is_empty() {
+            release(acquired_key.read().clone());
+        }
+        let cell_w = caps_cache
+            .read()
+            .clone()
+            .unwrap_or_default()
+            .cell_w_px
+            .max(1) as f32;
+        let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
+        acquire(
+            key.clone(),
+            GfxSource::Image {
+                url: url.clone(),
+                base_dir: base_dir.map(|p| p.to_path_buf()),
+                max_w,
+                max_cols: vw,
+                max_rows: vh,
+            },
+        );
+        *cur_key.read().lock().unwrap() = key.clone();
+        acquired_key.set(key.clone());
+        if dims(&key).is_none() {
+            cols.set(0);
+            rows.set(0);
+            sized.set(false);
+        }
     }
 
-    if error_msg.read().is_none() && data_cache.read().is_empty() {
-        if !*loading.read() {
-            loading.set(true);
-
-            let result_shared = load_result.read().clone();
-            let cell_w = caps_cache
-                .read()
-                .clone()
-                .unwrap_or_default()
-                .cell_w_px
-                .max(1) as f32;
-            let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
-            let url = url.clone();
-            let base_dir = base_dir.map(|p| p.to_path_buf());
-
-            std::thread::spawn(move || {
-                let encoded = load_image(&url, base_dir.as_deref(), max_w)
-                    .map(|data| {
-                        use base64::Engine;
-                        let w = data.width();
-                        let h = data.height();
-                        match data {
-                            ImageData::Png(raw, _, _) => {
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
-                                (b64, Vec::new(), w, h)
-                            }
-                            ImageData::Gif { frames, .. } => {
-                                let first =
-                                    base64::engine::general_purpose::STANDARD.encode(&frames[0].0);
-                                let rest = frames[1..]
-                                    .iter()
-                                    .map(|(png, delay)| {
-                                        (
-                                            base64::engine::general_purpose::STANDARD.encode(png),
-                                            *delay,
-                                        )
-                                    })
-                                    .collect();
-                                (first, rest, w, h)
-                            }
-                        }
-                    })
-                    .map_err(|e| format!("{:#}", e));
-                let mut guard = result_shared.lock().unwrap();
-                *guard = Some(encoded);
-            });
+    // Poll the manager for dimensions / error and reactively update layout.
+    if let Some((c, r)) = dims(&key) {
+        if *cols.read() != c || *rows.read() != r {
+            cols.set(c);
+            rows.set(r);
+            sized.set(true);
+            // Force a re-evaluation so a Place is emitted now that we know size.
+            drawn_at.set((-1, -1));
         }
-
-        let maybe_result = {
-            let arc = load_result.read().clone();
-            let mut guard = arc.lock().unwrap();
-            guard.take()
-        };
-
-        if let Some(result) = maybe_result {
-            match result {
-                Ok((b64_data, rest_frames, img_w, img_h)) => {
-                    data_cache.set(Arc::new(b64_data));
-                    frames_cache.set(
-                        rest_frames
-                            .into_iter()
-                            .map(|(s, d)| (Arc::new(s), d))
-                            .collect(),
-                    );
-
-                    let caps = caps_cache.read().clone().unwrap_or_default();
-                    let mut cols_ = img_w;
-                    let mut rows_ = img_h;
-                    cols_ = ((cols_ as f32) / (caps.cell_w_px.max(1) as f32)).ceil() as u32;
-                    cols_ = cols_.min((vw as f32).round() as u32);
-                    rows_ = ((rows_ as f32) / (caps.cell_h_px.max(1) as f32)).ceil() as u32;
-                    rows_ = rows_.min(vh);
-                    cols.set(cols_);
-                    rows.set(rows_);
-                    IMAGE_HEIGHT_CACHE.set(&key, cols_, rows_);
-
-                    debug::log_event(&debug::DebugEvent::ImageLoad {
-                        ts: debug::elapsed_ms(),
-                        url: url.clone(),
-                        pixel_w: img_w,
-                        pixel_h: img_h,
-                        cell_cols: cols_,
-                        cell_rows: rows_,
-                        load_ms: 0,
-                    });
-
-                    drawn_at.set((-1, -1));
-                }
-                Err(err_str) => {
-                    error_msg.set(Some(format!(
-                        "Error: {err_str}, Base directory: {dir:?}",
-                        dir = base_dir
-                    )));
-                    loading.set(false);
-                }
-            }
+    }
+    if let Some(err) = gfx_error(&key) {
+        if error_msg.read().is_none() {
+            error_msg.set(Some(err));
         }
     }
 
@@ -417,7 +131,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
             let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
             let actual_vis_rows = (visible_rows - top_clip_rows).max(0);
@@ -425,78 +139,43 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
 
             let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
 
-            if visible && !data_cache.read().is_empty() {
-                let id = if *transmitted.read() {
-                    image_id.read().id()
-                } else {
-                    let new_id = kitty::next_placement_id();
-                    image_id.write().set_id(new_id);
-                    new_id
-                };
+            let rect_cmd = GfxRect {
+                x,
+                y: render_y,
+                vis_cols: visible_cols,
+                vis_rows: actual_vis_rows,
+                src_y_offset: top_clip_rows,
+                cell_w: caps.cell_w_px as u32,
+                cell_h: caps.cell_h_px as u32,
+            };
 
-                if let Some(ref tx) = *io_tx.read() {
-                    if !*transmitted.read() {
-                        let data = Arc::clone(&data_cache.read());
-                        let frames = frames_cache.read().clone();
-                        let _ = tx.send(IoCmd::Render {
-                            id,
-                            data,
-                            frames,
-                            x,
-                            y: render_y,
-                            vis_cols: visible_cols,
-                            vis_rows: actual_vis_rows,
-                            src_y_offset: top_clip_rows,
-                            cell_w: caps.cell_w_px as u32,
-                            cell_h: caps.cell_h_px as u32,
-                        });
-                        transmitted.set(true);
-                        debug::log_event(&debug::DebugEvent::ImagePlace {
-                            ts: debug::elapsed_ms(),
-                            id,
-                            x,
-                            y: render_y,
-                            cols: visible_cols,
-                            rows: actual_vis_rows,
-                            src_y_offset: top_clip_rows,
-                        });
-                    } else {
-                        let _ = tx.send(IoCmd::Place {
-                            id,
-                            x,
-                            y: render_y,
-                            vis_cols: visible_cols,
-                            vis_rows: actual_vis_rows,
-                            src_y_offset: top_clip_rows,
-                            cell_w: caps.cell_w_px as u32,
-                            cell_h: caps.cell_h_px as u32,
-                        });
-                        debug::log_event(&debug::DebugEvent::ImagePlace {
-                            ts: debug::elapsed_ms(),
-                            id,
-                            x,
-                            y: render_y,
-                            cols: visible_cols,
-                            rows: actual_vis_rows,
-                            src_y_offset: top_clip_rows,
-                        });
-                    }
-                }
-            } else if !visible && *transmitted.read() {
-                let id = image_id.read().id();
-                if id != 0 {
-                    if let Some(ref tx) = *io_tx.read() {
-                        let _ = tx.send(IoCmd::Detach(id));
-                    }
-                    debug::log_event(&debug::DebugEvent::ImageDetach {
-                        ts: debug::elapsed_ms(),
-                        id,
-                        reason: "scrolled_offscreen".into(),
-                    });
-                }
+            if visible {
+                place(key.clone(), rect_cmd);
+                debug::log_event(&debug::DebugEvent::ImagePlace {
+                    ts: debug::elapsed_ms(),
+                    id: 0,
+                    x,
+                    y: render_y,
+                    cols: visible_cols,
+                    rows: actual_vis_rows,
+                    src_y_offset: top_clip_rows,
+                });
+            } else {
+                detach(key.clone());
+                debug::log_event(&debug::DebugEvent::ImageDetach {
+                    ts: debug::elapsed_ms(),
+                    id: 0,
+                    reason: "scrolled_offscreen".into(),
+                });
             }
         }
     }
+
+    // Release the terminal-side image when the component unmounts.
+    let _release_guard = hooks.use_ref({
+        let ck = cur_key.read().clone();
+        move || ReleaseGuard { key: ck }
+    });
 
     if let Some(err) = error_msg.read().clone() {
         return element! {
@@ -508,13 +187,13 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     }
 
     if debug::are_annotations_enabled() {
-        let img_cols = cols.read().clone();
-        let img_rows = rows.read().clone();
+        let img_cols = cols.read().clone().max(1);
+        let img_rows = rows.read().clone().max(1);
         let url_display: String = url.chars().take(24).collect();
         element! {
             View(
-                width: img_cols.max(1),
-                height: img_rows.max(1),
+                width: img_cols,
+                height: img_rows,
                 border_style: BorderStyle::Single,
                 border_color: theme::DBG_IMAGE,
                 background_color: theme::DBG_BG,

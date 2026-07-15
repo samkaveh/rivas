@@ -36,6 +36,8 @@ This line should appear below it.
 >
 > Quotes can contain **inline formatting** and `inline code` $x^2$.
 
+# Remote Gif
+![remote gif](https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExejZtaHlzcmN3ZjExenlzNWp2Znlra2dmZG1wa2l4cTZ1a2JmNjFyeCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Uknzzw3H2YRQWLCm6P/giphy.gif)
 ## Lists
 
 - Unordered item $\int_0^\inf$

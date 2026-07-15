@@ -1,14 +1,19 @@
-use crate::components::image::IMAGE_HEIGHT_CACHE;
 use crate::debug;
+use crate::output::graphics_manager::{
+    GfxRect, GfxSource, ReleaseGuard, acquire, detach, dims, gfx_error, place, release,
+};
 use crate::theme;
 use iocraft::prelude::*;
-use std::io::Write;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
-use crate::{
-    assets::mermaid::render_mermaid_to_png,
-    output::{capabilities::TermCaps, kitty},
-};
+/// Unique id generator for graphics components. Each occurrence of a mermaid
+/// diagram (or image/math formula) gets its own terminal graphic id so that
+/// placing/detaching one occurrence never affects another that shares content.
+static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+fn next_instance_id() -> u64 {
+    INSTANCE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Default, Props)]
 pub struct MermaidBlockProps {
@@ -33,258 +38,67 @@ pub struct KittyMermaidProps {
     pub viewport_width: Option<u32>,
 }
 
-enum MermaidCmd {
-    Render {
-        id: u32,
-        data: Vec<u8>,
-        x: i32,
-        y: i32,
-        vis_cols: i32,
-        vis_rows: i32,
-        src_y_offset: i32,
-        cell_w: u32,
-        cell_h: u32,
-    },
-    Place {
-        id: u32,
-        x: i32,
-        y: i32,
-        vis_cols: i32,
-        vis_rows: i32,
-        src_y_offset: i32,
-        cell_w: u32,
-        cell_h: u32,
-    },
-    Detach(u32),
-    Free(u32),
-}
-
 #[component]
 pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let vw = props.viewport_width.unwrap_or(100);
-    let key = format!("mermaid:{}:{}", vw, props.source);
-    let (cached_cols, cached_rows) = IMAGE_HEIGHT_CACHE.get(&key).unwrap_or((0, 0));
+    let vh = props.viewport_height.unwrap_or(100);
+    // Unique per-occurrence key so identical diagrams don't share a terminal
+    // graphic id (which would let one occurrence's detach/place clobber others).
+    let instance = hooks.use_ref(|| next_instance_id());
+    let key = format!("{}:{}#{}", vw, props.source, *instance.read());
+    let (cached_cols, cached_rows) = dims(&key).unwrap_or((0, 0));
 
     let rect = hooks.use_component_rect();
     let (term_width, term_height) = hooks.use_terminal_size();
     let mut drawn_at = hooks.use_state(|| (-1i32, -1i32));
-    let mut image_id = hooks.use_ref(|| kitty::ImageGuard::new());
-    let mut data_cache = hooks.use_ref(|| Vec::<u8>::new());
-    let mut cache_key = hooks.use_ref(String::new);
     let mut cols = hooks.use_ref(|| cached_cols);
     let mut rows = hooks.use_ref(|| cached_rows);
     let mut error_msg = hooks.use_state(|| None::<String>);
-    let mut loading = hooks.use_ref(|| false);
-    let mut load_result =
-        hooks.use_ref(|| Arc::new(Mutex::new(None::<Result<(Vec<u8>, u32, u32), String>>)));
-    let mut transmitted = hooks.use_ref(|| false);
-    let caps_cache = hooks.use_ref(|| TermCaps::detect().ok());
-    let io_tx = hooks.use_ref(|| {
-        let (tx, rx) = mpsc::channel::<MermaidCmd>();
-        std::thread::spawn(move || {
-            let mut last_id = 0u32;
-            while let Ok(mut cmd) = rx.recv() {
-                while let Ok(next) = rx.try_recv() {
-                    cmd = next;
-                }
-                let mut stdout = std::io::stdout().lock();
-                match cmd {
-                    MermaidCmd::Render {
-                        id,
-                        data,
-                        x,
-                        y,
-                        vis_cols,
-                        vis_rows,
-                        src_y_offset,
-                        cell_w,
-                        cell_h,
-                    } => {
-                        let src_y_px = src_y_offset as u32 * cell_h;
-                        let crop_h_px = vis_rows as u32 * cell_h;
-                        let crop_w_px = vis_cols as u32 * cell_w;
+    let mut sized = hooks.use_state(|| false);
+    let mut acquired_key = hooks.use_ref(|| String::new());
+    let mut cur_key = hooks.use_ref(|| Arc::new(Mutex::new(String::new())));
+    let caps_cache = hooks.use_ref(|| crate::output::capabilities::TermCaps::detect().ok());
 
-                        write!(stdout, "\x1b7").unwrap();
-                        write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-
-                        if last_id != 0 {
-                            kitty::delete_image(&mut stdout, last_id);
-                        }
-
-                        // a=T auto-places at cursor — placement is tracked by id
-                        kitty::write_to_cropped(
-                            &mut stdout,
-                            id,
-                            &data,
-                            vis_cols as u32,
-                            vis_rows as u32,
-                            0,
-                            src_y_px,
-                            crop_w_px,
-                            crop_h_px,
-                        );
-
-                        last_id = id;
-
-                        write!(stdout, "\x1b8").unwrap();
-                        stdout.flush().unwrap();
-
-                        debug::log_event(&debug::DebugEvent::KittyTransmit {
-                            ts: debug::elapsed_ms(),
-                            id,
-                            cols: vis_cols as u32,
-                            rows: vis_rows as u32,
-                            crop_x: 0,
-                            crop_y: src_y_px,
-                            crop_w: crop_w_px,
-                            crop_h: crop_h_px,
-                            data_size: data.len(),
-                            has_animation: false,
-                        });
-                    }
-                    MermaidCmd::Place {
-                        id,
-                        x,
-                        y,
-                        vis_cols,
-                        vis_rows,
-                        src_y_offset,
-                        cell_w,
-                        cell_h,
-                    } => {
-                        let src_y_px = src_y_offset as u32 * cell_h;
-                        let crop_h_px = vis_rows as u32 * cell_h;
-                        let crop_w_px = vis_cols as u32 * cell_w;
-
-                        write!(stdout, "\x1b7").unwrap();
-                        write!(stdout, "\x1b[{};{}H", y + 1, x + 1).unwrap();
-
-                        // Delete old placement (keep data cached)
-                        kitty::delete_placements(&mut stdout, id);
-
-                        // Create fresh placement at cursor (no retransmission)
-                        kitty::place_image(
-                            &mut stdout,
-                            id,
-                            vis_cols as u32,
-                            vis_rows as u32,
-                            0,
-                            src_y_px,
-                            crop_w_px,
-                            crop_h_px,
-                        );
-
-                        write!(stdout, "\x1b8").unwrap();
-                        stdout.flush().unwrap();
-
-                        debug::log_event(&debug::DebugEvent::KittyPlace {
-                            ts: debug::elapsed_ms(),
-                            id,
-                            cols: vis_cols as u32,
-                            rows: vis_rows as u32,
-                            crop_x: 0,
-                            crop_y: src_y_px,
-                            crop_w: crop_w_px,
-                            crop_h: crop_h_px,
-                        });
-                    }
-                    MermaidCmd::Detach(id) => {
-                        if id != 0 {
-                            kitty::delete_placements(&mut stdout, id);
-                            stdout.flush().unwrap();
-                            debug::log_event(&debug::DebugEvent::KittyDelete {
-                                ts: debug::elapsed_ms(),
-                                id,
-                                scope: "placements".into(),
-                            });
-                        }
-                    }
-                    MermaidCmd::Free(id) => {
-                        if id != 0 {
-                            kitty::delete_image(&mut stdout, id);
-                            stdout.flush().unwrap();
-                            last_id = 0;
-                            debug::log_event(&debug::DebugEvent::KittyDelete {
-                                ts: debug::elapsed_ms(),
-                                id,
-                                scope: "image".into(),
-                            });
-                        }
-                    }
-                }
-            }
-        });
-        Some(tx)
-    });
-
-    let vw = props.viewport_width.unwrap_or(100);
-    let vh = props.viewport_height.unwrap_or(100);
-
-    // Round scale to 0.1 to avoid cache thrashing on continuous zoom
-    let key = format!("{}:{}", vw, props.source);
-
-    if *cache_key.read() != key {
-        cache_key.set(key);
-        transmitted.set(false);
-        data_cache.set(Vec::new());
-        cols.set(0);
-        rows.set(0);
-        drawn_at.set((-1, -1));
-        error_msg.set(None);
-        loading.set(false);
-        load_result.set(Arc::new(Mutex::new(None)));
+    if acquired_key.read().is_empty() || *acquired_key.read() != key {
+        if !acquired_key.read().is_empty() {
+            release(acquired_key.read().clone());
+        }
+        let cell_w = caps_cache
+            .read()
+            .clone()
+            .unwrap_or_default()
+            .cell_w_px
+            .max(1) as f32;
+        let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
+        acquire(
+            key.clone(),
+            GfxSource::Mermaid {
+                source: props.source.clone(),
+                max_w,
+                max_cols: (2.0 * vw as f32).round() as u32,
+                max_rows: vh,
+            },
+        );
+        *cur_key.read().lock().unwrap() = key.clone();
+        acquired_key.set(key.clone());
+        if dims(&key).is_none() {
+            cols.set(0);
+            rows.set(0);
+            sized.set(false);
+        }
     }
 
-    if error_msg.read().is_none() && data_cache.read().is_empty() {
-        if !*loading.read() {
-            loading.set(true);
-
-            let result_shared = load_result.read().clone();
-            let cell_w = caps_cache
-                .read()
-                .clone()
-                .unwrap_or_default()
-                .cell_w_px
-                .max(1) as f32;
-            let max_w = ((vw as f32) * cell_w * 2.0).round() as u32;
-            let source = props.source.clone();
-
-            std::thread::spawn(move || {
-                let result = render_mermaid_to_png(&source, max_w).map_err(|e| format!("{:#}", e));
-                let mut guard = result_shared.lock().unwrap();
-                *guard = Some(result);
-            });
+    if let Some((c, r)) = dims(&key) {
+        if *cols.read() != c || *rows.read() != r {
+            cols.set(c);
+            rows.set(r);
+            sized.set(true);
+            drawn_at.set((-1, -1));
         }
-
-        let maybe_result = {
-            let arc = load_result.read().clone();
-            let mut guard = arc.lock().unwrap();
-            guard.take()
-        };
-
-        if let Some(result) = maybe_result {
-            match result {
-                Ok((png_data, img_w, img_h)) => {
-                    data_cache.set(png_data);
-                    let mut cols_ = img_w;
-                    let mut rows_ = img_h;
-                    let caps = caps_cache.read().clone().unwrap_or_default();
-
-                    cols_ = ((cols_ as f32) / (caps.cell_w_px as f32)).ceil() as u32;
-                    cols_ = cols_.min((2.0 * vw as f32).round() as u32);
-                    rows_ = ((rows_ as f32) / (caps.cell_h_px as f32)).ceil() as u32;
-                    rows_ = rows_.min(vh);
-
-                    cols.set(cols_);
-                    rows.set(rows_);
-
-                    drawn_at.set((-1, -1));
-                }
-                Err(err_str) => {
-                    error_msg.set(Some(err_str));
-                    loading.set(false);
-                }
-            }
+    }
+    if let Some(err) = gfx_error(&key) {
+        if error_msg.read().is_none() {
+            error_msg.set(Some(err));
         }
     }
 
@@ -299,62 +113,50 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
-            // How many rows are scrolled off the top
             let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
             let actual_vis_rows = (visible_rows - top_clip_rows).max(0);
             let render_y = if y < 0 { 0 } else { y };
 
             let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
 
-            if visible && !data_cache.read().is_empty() {
-                let id = if *transmitted.read() {
-                    image_id.read().id()
-                } else {
-                    let new_id = kitty::next_placement_id();
-                    image_id.write().set_id(new_id);
-                    new_id
-                };
+            let rect_cmd = GfxRect {
+                x,
+                y: render_y,
+                vis_cols: visible_cols,
+                vis_rows: actual_vis_rows,
+                src_y_offset: top_clip_rows,
+                cell_w: caps.cell_w_px as u32,
+                cell_h: caps.cell_h_px as u32,
+            };
 
-                if let Some(ref tx) = *io_tx.read() {
-                    if !*transmitted.read() {
-                        let data = data_cache.read().clone();
-                        let _ = tx.send(MermaidCmd::Render {
-                            id,
-                            data,
-                            x,
-                            y: render_y,
-                            vis_cols: visible_cols,
-                            vis_rows: actual_vis_rows,
-                            src_y_offset: top_clip_rows,
-                            cell_w: caps.cell_w_px as u32,
-                            cell_h: caps.cell_h_px as u32,
-                        });
-                        transmitted.set(true);
-                    } else {
-                        let _ = tx.send(MermaidCmd::Place {
-                            id,
-                            x,
-                            y: render_y,
-                            vis_cols: visible_cols,
-                            vis_rows: actual_vis_rows,
-                            src_y_offset: top_clip_rows,
-                            cell_w: caps.cell_w_px as u32,
-                            cell_h: caps.cell_h_px as u32,
-                        });
-                    }
-                }
-            } else if !visible && *transmitted.read() {
-                let id = image_id.read().id();
-                if id != 0 {
-                    if let Some(ref tx) = *io_tx.read() {
-                        let _ = tx.send(MermaidCmd::Detach(id));
-                    }
-                }
+            if visible {
+                place(key.clone(), rect_cmd);
+                debug::log_event(&debug::DebugEvent::ImagePlace {
+                    ts: debug::elapsed_ms(),
+                    id: 0,
+                    x,
+                    y: render_y,
+                    cols: visible_cols,
+                    rows: actual_vis_rows,
+                    src_y_offset: top_clip_rows,
+                });
+            } else {
+                detach(key.clone());
+                debug::log_event(&debug::DebugEvent::ImageDetach {
+                    ts: debug::elapsed_ms(),
+                    id: 0,
+                    reason: "scrolled_offscreen".into(),
+                });
             }
         }
     }
+
+    let _release_guard = hooks.use_ref({
+        let ck = cur_key.read().clone();
+        move || ReleaseGuard { key: ck }
+    });
 
     if let Some(err) = error_msg.read().clone() {
         return element! {

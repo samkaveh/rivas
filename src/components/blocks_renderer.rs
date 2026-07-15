@@ -2,7 +2,8 @@ use crate::components::code_block::CodeBlock;
 use crate::components::editor::{EditorState, Mode};
 use crate::components::heading::Heading;
 use crate::components::html_block::HtmlBlock;
-use crate::components::image::{IMAGE_HEIGHT_CACHE, Image};
+use crate::components::image::Image;
+use crate::output::graphics_manager::IMAGE_HEIGHT_CACHE;
 use crate::components::list_block::ListBlock;
 use crate::components::math_block::MathBlock;
 use crate::components::mermaid_block::MermaidBlock;
@@ -61,8 +62,20 @@ fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
             ((chars as f32 / wrap_width as f32).ceil() as u32).max(1)
         }
         Block::Code { code, .. } => code.lines().count() as u32 + 2,
-        Block::Math { .. } => 5,
-        Block::Mermaid { .. } => 10,
+        Block::Math { display, .. } => {
+            let cache_key = format!("math:{}:{}:{}", vw.unwrap_or(100), display, content);
+            IMAGE_HEIGHT_CACHE
+                .get(&cache_key)
+                .map(|(_, h)| h)
+                .unwrap_or(if *display { 2 } else { 1 })
+        }
+        Block::Mermaid { source, .. } => {
+            let cache_key = format!("mermaid:{}:{}", vw.unwrap_or(100), source);
+            IMAGE_HEIGHT_CACHE
+                .get(&cache_key)
+                .map(|(_, h)| h)
+                .unwrap_or(10)
+        }
         Block::Table { rows, .. } => (rows.len() + 1) as u32,
         Block::List { items, .. } => items.len() as u32,
         Block::Quote { children, .. } => children
@@ -72,7 +85,7 @@ fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
             .max(1),
         Block::ThematicBreak { .. } => 1,
         Block::Image { url, .. } => {
-            let cache_key = format!("{}:{}", vw.unwrap_or(0), url);
+            let cache_key = format!("{}:{}", vw.unwrap_or(100), url);
             IMAGE_HEIGHT_CACHE
                 .get(&cache_key)
                 .map(|(_, h)| h)
