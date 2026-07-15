@@ -368,7 +368,7 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
         .into_any();
     }
 
-    if debug::is_enabled() {
+    if debug::are_annotations_enabled() {
         let m_cols = cols.read().clone().max(8);
         let m_rows = rows.read().clone().max(3);
         let label = if props.display {

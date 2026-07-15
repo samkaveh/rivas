@@ -5,8 +5,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-/// Global debug mode flag.
+/// Global debug JSON logging flag.
 pub static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Global debug annotations (visual overlay) flag.
+pub static ANNOTATIONS_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Timestamp of app start for relative ms values.
 static mut START: Option<Instant> = None;
@@ -14,9 +17,10 @@ static mut START: Option<Instant> = None;
 /// JSONL log writer, guarded by a Mutex.
 static mut LOG_WRITER: Option<Mutex<BufWriter<File>>> = None;
 
-pub fn init(enabled: bool) {
-    DEBUG_MODE.store(enabled, Ordering::Relaxed);
-    if enabled {
+pub fn init(logging: bool, annotations: bool) {
+    DEBUG_MODE.store(logging, Ordering::Relaxed);
+    ANNOTATIONS_MODE.store(annotations, Ordering::Relaxed);
+    if logging {
         unsafe {
             START = Some(Instant::now());
         }
@@ -29,6 +33,10 @@ pub fn init(enabled: bool) {
 
 pub fn is_enabled() -> bool {
     DEBUG_MODE.load(Ordering::Relaxed)
+}
+
+pub fn are_annotations_enabled() -> bool {
+    ANNOTATIONS_MODE.load(Ordering::Relaxed)
 }
 
 pub fn elapsed_ms() -> u128 {

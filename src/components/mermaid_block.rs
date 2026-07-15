@@ -365,7 +365,7 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
         .into_any();
     }
 
-    if debug::is_enabled() {
+    if debug::are_annotations_enabled() {
         let m_cols = cols.read().clone().max(10);
         let m_rows = rows.read().clone().max(5);
         element! {

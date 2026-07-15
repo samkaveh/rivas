@@ -39,15 +39,31 @@ struct Cli {
     /// Open a side-by-side markdown editor and live preview.
     #[arg(short, long)]
     edit: bool,
-    /// Enable debug mode: visual overlay boxes + JSONL log to rivas-debug.jsonl
+    /// Enable debug mode: JSONL log to rivas-debug.jsonl + visual overlay annotations
     #[arg(long)]
     debug: bool,
+    /// Debug JSON logging only — writes rivas-debug.jsonl without visual overlays
+    #[arg(long)]
+    debug_json_only: bool,
+    /// Show debug layout annotations (visual overlay boxes). Can combine with --debug or --debug-json-only
+    #[arg(long)]
+    debug_annotations: bool,
+}
+
+/// Whether debug JSON logging is enabled (from --debug or --debug-json-only)
+fn debug_json_enabled(cli: &Cli) -> bool {
+    cli.debug || cli.debug_json_only
+}
+
+/// Whether visual debug annotations should be shown
+fn debug_annotations_enabled(cli: &Cli) -> bool {
+    cli.debug_annotations || cli.debug
 }
 
 fn main() -> Result<()> {
     env_logger::init();
     let cli = Cli::parse();
-    debug::init(cli.debug);
+    debug::init(debug_json_enabled(&cli), debug_annotations_enabled(&cli));
 
     let (mut content, mut file_path) = match &cli.file {
         // CASE 1: User provided a path
@@ -98,7 +114,8 @@ fn main() -> Result<()> {
                 file_path: file_path.clone(),
                 content: content.as_str(),
                 action: action.clone(),
-                debug: cli.debug,
+                debug: debug_json_enabled(&cli),
+                debug_annotations: debug_annotations_enabled(&cli),
             ))
             .fullscreen(),
         )?;
@@ -134,6 +151,7 @@ struct AppProps<'a> {
     content: &'a str,
     action: Arc<Mutex<AppAction>>,
     debug: bool,
+    debug_annotations: bool,
 }
 
 #[component]
@@ -206,6 +224,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 follow_ref: None,
                 cursor_offset: Some(cursor_offset),
                 debug: props.debug,
+                debug_annotations: props.debug_annotations,
                 on_change,
                 on_quit,
             )
