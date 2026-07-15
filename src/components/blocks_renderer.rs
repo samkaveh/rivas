@@ -62,7 +62,13 @@ fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
             ((chars as f32 / wrap_width as f32).ceil() as u32).max(1)
         }
         Block::Code { code, .. } => code.lines().count() as u32 + 2,
-        Block::Math { .. } => 5,
+        Block::Math { display, .. } => {
+            let cache_key = format!("math:{}:{}:{}", vw.unwrap_or(100), display, content);
+            IMAGE_HEIGHT_CACHE
+                .get(&cache_key)
+                .map(|(_, h)| h)
+                .unwrap_or(if *display { 2 } else { 1 })
+        }
         Block::Mermaid { source, .. } => {
             let cache_key = format!("mermaid:{}:{}", vw.unwrap_or(100), source);
             IMAGE_HEIGHT_CACHE

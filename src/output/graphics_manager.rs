@@ -344,21 +344,19 @@ fn place_at<W: Write>(stdout: &mut W, id: u32, rect: GfxRect) {
 }
 
 fn evict(reg: &mut HashMap<String, Entry>, tick: u64) {
-    if reg.len() <= CACHE_CAP {
-        return;
-    }
-    let mut released: Vec<(u64, String)> = reg
+    // First, free any terminal images whose refcount has dropped to 0. These
+    // are no longer referenced by any mounted component, so their pixels must be
+    // released from the terminal immediately — otherwise they linger on screen /
+    // accumulate in the terminal's graphic store even in small documents.
+    let mut freed: Vec<String> = reg
         .iter()
         .filter(|(_, e)| e.refcount == 0)
-        .map(|(k, e)| (e.last_used, k.clone()))
+        .map(|(k, _)| k.clone())
         .collect();
-    released.sort_by_key(|(t, _)| *t);
+    freed.sort_by_key(|k| reg.get(k).map(|e| e.last_used).unwrap_or(0));
     let mut stdout = std::io::stdout().lock();
     let mut to_remove = Vec::new();
-    for (_, k) in released {
-        if reg.len() <= CACHE_CAP {
-            break;
-        }
+    for k in freed {
         if let Some(e) = reg.get(&k) {
             if e.refcount == 0 {
                 kitty::delete_image(&mut stdout, e.kitty_id);
@@ -368,6 +366,31 @@ fn evict(reg: &mut HashMap<String, Entry>, tick: u64) {
     }
     for k in to_remove {
         reg.remove(&k);
+    }
+
+    // Then, if we are still over the cap, evict the least-recently-used
+    // zero-refcount entries until back under the cap.
+    if reg.len() <= CACHE_CAP {
+        let _ = stdout.flush();
+        let _ = tick;
+        return;
+    }
+    let mut released: Vec<(u64, String)> = reg
+        .iter()
+        .filter(|(_, e)| e.refcount == 0)
+        .map(|(k, e)| (e.last_used, k.clone()))
+        .collect();
+    released.sort_by_key(|(t, _)| *t);
+    for (_, k) in released {
+        if reg.len() <= CACHE_CAP {
+            break;
+        }
+        if let Some(e) = reg.get(&k) {
+            if e.refcount == 0 {
+                kitty::delete_image(&mut stdout, e.kitty_id);
+                reg.remove(&k);
+            }
+        }
     }
     let _ = stdout.flush();
     let _ = tick;

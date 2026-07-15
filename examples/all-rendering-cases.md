@@ -36,7 +36,7 @@ This line should appear below it.
 >
 > Quotes can contain **inline formatting** and `inline code` $x^2$.
 
-## Lists
+# Lists
 
 - Unordered item $\int_0^\inf$
 - Unordered item with nested content

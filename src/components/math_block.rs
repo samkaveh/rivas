@@ -4,7 +4,16 @@ use crate::output::graphics_manager::{
 };
 use crate::theme;
 use iocraft::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Unique id generator for graphics components. Each occurrence of an image or
+/// math formula gets its own terminal graphic id so that placing/detaching one
+/// occurrence never affects another that happens to share the same content.
+static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+fn next_instance_id() -> u64 {
+    INSTANCE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Default, Props)]
 pub struct MathBlockProps {
@@ -35,7 +44,16 @@ pub struct KittyMathProps {
 pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let vw = props.viewport_width.unwrap_or(100);
     let vh = props.viewport_height.unwrap_or(100);
-    let key = format!("math:{}:{}:{}", vw, props.display, props.content);
+    // Unique per-occurrence key so identical formulas don't share a terminal
+    // graphic id (which would let one occurrence's detach/place clobber others).
+    let instance = hooks.use_ref(|| next_instance_id());
+    let key = format!(
+        "math:{}:{}:{}#{}",
+        vw,
+        props.display,
+        props.content,
+        *instance.read()
+    );
     let (cached_cols, cached_rows) = dims(&key).unwrap_or((0, 0));
 
     let rect = hooks.use_component_rect();
@@ -104,7 +122,7 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
 
             let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
-            let visible_rows = img_rows.min(term_height as i32 - y - 1).max(0);
+            let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
             let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
             let actual_vis_rows = (visible_rows - top_clip_rows).max(0);
