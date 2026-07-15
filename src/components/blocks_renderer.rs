@@ -167,6 +167,7 @@ pub struct BlocksRendererProps {
     pub editor_state: Option<Ref<Option<EditorState>>>,
     pub scroll_handle: Option<Ref<ScrollViewHandle>>,
     pub debug: bool,
+    pub debug_annotations: bool,
 }
 
 #[component]
@@ -568,8 +569,8 @@ pub fn BlocksRenderer(
                         Block::Html { content, .. } => element!{HtmlBlock(content: content.clone())}.into_any(),
                     };
 
-                    // Wrap with debug border/label if debug mode is on
-                    let rendered = if props.debug {
+                    // Wrap with debug border/label if debug annotations are enabled
+                    let rendered = if props.debug_annotations {
                         let (label, color) = match block {
                             Block::Heading { .. } => ("H".to_string(), theme::DBG_HEADING),
                             Block::Paragraph { .. } => ("P".to_string(), theme::DBG_PARAGRAPH),

@@ -19,6 +19,7 @@ pub struct DocumentProps {
     pub follow_ref: Option<Ref<usize>>,
     pub cursor_offset: Option<Ref<usize>>,
     pub debug: bool,
+    pub debug_annotations: bool,
     pub on_change: Handler<String>,
     pub on_quit: Handler<()>,
 }
@@ -252,6 +253,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         editor_state: Some(editor_state.clone()),
                         scroll_handle: Some(scroll_handle.clone()),
                         debug: props.debug,
+                        debug_annotations: props.debug_annotations,
                     )
                     }
                 }

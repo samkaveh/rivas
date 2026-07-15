@@ -507,7 +507,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         .into_any();
     }
 
-    if debug::is_enabled() {
+    if debug::are_annotations_enabled() {
         let img_cols = cols.read().clone();
         let img_rows = rows.read().clone();
         let url_display: String = url.chars().take(24).collect();
