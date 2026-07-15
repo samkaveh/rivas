@@ -1,8 +1,8 @@
 use serde::Serialize;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 /// Global debug mode flag.
@@ -32,11 +32,7 @@ pub fn is_enabled() -> bool {
 }
 
 pub fn elapsed_ms() -> u128 {
-    unsafe {
-        START
-            .map(|t| t.elapsed().as_millis())
-            .unwrap_or(0)
-    }
+    unsafe { START.map(|t| t.elapsed().as_millis()).unwrap_or(0) }
 }
 
 pub fn log_event(event: &DebugEvent) {
@@ -104,11 +100,7 @@ pub enum DebugEvent {
         src_y_offset: i32,
     },
     #[serde(rename = "image_detach")]
-    ImageDetach {
-        ts: u128,
-        id: u32,
-        reason: String,
-    },
+    ImageDetach { ts: u128, id: u32, reason: String },
     #[serde(rename = "block_layout")]
     BlockLayout {
         ts: u128,
@@ -119,11 +111,7 @@ pub enum DebugEvent {
         est_height: u32,
     },
     #[serde(rename = "scroll")]
-    Scroll {
-        ts: u128,
-        old: i32,
-        new: i32,
-    },
+    Scroll { ts: u128, old: i32, new: i32 },
     // ── Kitty protocol events ──────────────────────────────────────────────────
     #[serde(rename = "kitty_transmit")]
     KittyTransmit {
