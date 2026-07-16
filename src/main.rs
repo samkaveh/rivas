@@ -1,3 +1,4 @@
+use crate::output::graphics_manager;
 use crate::output::kitty;
 use anyhow::Result;
 use clap::Parser;
@@ -199,6 +200,10 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     }
 
     system.set_mouse_capture(mouse_captured.get());
+    // Flush any pending kitty graphic commands buffered by the background
+    // graphics thread.  Must happen here (main render thread) so the writes
+    // are atomic w.r.t. iocraft/crossterm output.
+    graphics_manager::flush_output();
     let current_content = content.read().clone();
     let on_change = hooks.use_async_handler(move |next_content: String| {
         let mut content = content.clone();

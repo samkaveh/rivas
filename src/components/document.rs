@@ -255,6 +255,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         debug: props.debug,
                         debug_annotations: props.debug_annotations,
                     )
+                    View(height: (vh.unwrap_or(24) / 3).max(5)) {}
                     }
                 }
             }
