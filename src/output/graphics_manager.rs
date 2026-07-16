@@ -16,6 +16,12 @@ use std::sync::{
     mpsc::{self, Sender},
 };
 
+/// Buffered kitty terminal output.  The background graphics thread writes here
+/// instead of directly to stdout, and the main render thread drains it via
+/// `flush_output()`.  This prevents byte-level interleaving with iocraft/crossterm
+/// output on the same fd.
+static PENDING_OUTPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
 /// A placement request for an already-cached image. The manager turns this into
 /// a lightweight `a=p` (no retransmission) once the pixels are in the terminal.
 #[derive(Clone, Copy)]
@@ -103,7 +109,11 @@ lazy_static::lazy_static! {
 
 enum EntryStatus {
     Loading,
-    Ready(Arc<String>, Vec<(Arc<String>, u32)>, bool /* has_animation */),
+    Ready(
+        Arc<String>,
+        Vec<(Arc<String>, u32)>,
+        bool, /* has_animation */
+    ),
     Error(String),
 }
 
@@ -129,11 +139,24 @@ struct LoadedData {
 }
 
 enum Cmd {
-    Acquire { key: String, source: GfxSource },
-    Loaded { key: String, result: Result<LoadedData, String> },
-    Place { key: String, rect: GfxRect },
-    Detach { key: String },
-    Release { key: String },
+    Acquire {
+        key: String,
+        source: GfxSource,
+    },
+    Loaded {
+        key: String,
+        result: Result<LoadedData, String>,
+    },
+    Place {
+        key: String,
+        rect: GfxRect,
+    },
+    Detach {
+        key: String,
+    },
+    Release {
+        key: String,
+    },
 }
 
 const CACHE_CAP: usize = 128;
@@ -182,7 +205,8 @@ fn load(source: GfxSource) -> Result<LoadedData, String> {
             max_cols,
             max_rows,
         } => {
-            let data = load_image(&url, base_dir.as_deref(), max_w).map_err(|e| format!("{:#}", e))?;
+            let data =
+                load_image(&url, base_dir.as_deref(), max_w).map_err(|e| format!("{:#}", e))?;
             let w = data.width();
             let h = data.height();
             let (b64, frames) = match data {
@@ -247,14 +271,12 @@ fn load(source: GfxSource) -> Result<LoadedData, String> {
     }
 }
 
-fn transmit_at<W: Write>(
-    stdout: &mut W,
+fn transmit_at(
     id: u32,
     data: &Arc<String>,
     frames: &[(Arc<String>, u32)],
     has_anim: bool,
     rect: GfxRect,
-    visible: bool,
 ) {
     let cell_w = rect.cell_w;
     let cell_h = rect.cell_h;
@@ -262,17 +284,11 @@ fn transmit_at<W: Write>(
     let crop_w_px = rect.vis_cols as u32 * cell_w;
     let crop_h_px = rect.vis_rows as u32 * cell_h;
 
-    write!(stdout, "\x1b7").unwrap();
-    if visible {
-        write!(stdout, "\x1b[{};{}H", rect.y + 1, rect.x + 1).unwrap();
-    } else {
-        write!(stdout, "\x1b[1;1H").unwrap();
-    }
-
-    // a=T auto-places at the cursor; for the not-visible case we immediately
-    // drop that stray placement so only the cached data remains.
-    kitty::write_to_cropped_encoded(
-        stdout,
+    // a=t transmits image data into the terminal's graphic store without
+    // creating any visual placement — no cursor movement, no scroll damage.
+    let mut buf = PENDING_OUTPUT.lock().unwrap();
+    kitty::transmit_only_encoded(
+        &mut *buf,
         id,
         data.as_str(),
         rect.vis_cols as u32,
@@ -284,14 +300,9 @@ fn transmit_at<W: Write>(
     );
     if has_anim {
         let fr: Vec<(&str, u32)> = frames.iter().map(|(s, d)| (s.as_str(), *d)).collect();
-        kitty::write_animation_frames_encoded(stdout, id, &fr);
-        kitty::start_animation(stdout, id);
+        kitty::write_animation_frames_encoded(&mut *buf, id, &fr);
+        kitty::start_animation(&mut *buf, id);
     }
-    if !visible {
-        kitty::delete_placements(stdout, id);
-    }
-    write!(stdout, "\x1b8").unwrap();
-    stdout.flush().unwrap();
 
     debug::log_event(&debug::DebugEvent::KittyTransmit {
         ts: debug::elapsed_ms(),
@@ -307,19 +318,19 @@ fn transmit_at<W: Write>(
     });
 }
 
-fn place_at<W: Write>(stdout: &mut W, id: u32, rect: GfxRect) {
+fn place_at(id: u32, rect: GfxRect) {
     let cell_w = rect.cell_w;
     let cell_h = rect.cell_h;
     let src_y_px = rect.src_y_offset as u32 * cell_h;
     let crop_w_px = rect.vis_cols as u32 * cell_w;
     let crop_h_px = rect.vis_rows as u32 * cell_h;
 
-    write!(stdout, "\x1b7").unwrap();
-    write!(stdout, "\x1b[{};{}H", rect.y + 1, rect.x + 1).unwrap();
-    // Remove the previous placement, keep data cached, create a fresh one.
-    kitty::delete_placements(stdout, id);
+    let mut buf = PENDING_OUTPUT.lock().unwrap();
+    write!(buf, "\x1b7").unwrap();
+    write!(buf, "\x1b[{};{}H", rect.y + 1, rect.x + 1).unwrap();
+    kitty::delete_placements(&mut *buf, id);
     kitty::place_image(
-        stdout,
+        &mut *buf,
         id,
         rect.vis_cols as u32,
         rect.vis_rows as u32,
@@ -328,8 +339,7 @@ fn place_at<W: Write>(stdout: &mut W, id: u32, rect: GfxRect) {
         crop_w_px,
         crop_h_px,
     );
-    write!(stdout, "\x1b8").unwrap();
-    stdout.flush().unwrap();
+    write!(buf, "\x1b8").unwrap();
 
     debug::log_event(&debug::DebugEvent::KittyPlace {
         ts: debug::elapsed_ms(),
@@ -354,12 +364,12 @@ fn evict(reg: &mut HashMap<String, Entry>, tick: u64) {
         .map(|(k, _)| k.clone())
         .collect();
     freed.sort_by_key(|k| reg.get(k).map(|e| e.last_used).unwrap_or(0));
-    let mut stdout = std::io::stdout().lock();
+    let mut buf = PENDING_OUTPUT.lock().unwrap();
     let mut to_remove = Vec::new();
     for k in freed {
         if let Some(e) = reg.get(&k) {
             if e.refcount == 0 {
-                kitty::delete_image(&mut stdout, e.kitty_id);
+                kitty::delete_image(&mut *buf, e.kitty_id);
                 to_remove.push(k);
             }
         }
@@ -371,7 +381,6 @@ fn evict(reg: &mut HashMap<String, Entry>, tick: u64) {
     // Then, if we are still over the cap, evict the least-recently-used
     // zero-refcount entries until back under the cap.
     if reg.len() <= CACHE_CAP {
-        let _ = stdout.flush();
         let _ = tick;
         return;
     }
@@ -387,12 +396,11 @@ fn evict(reg: &mut HashMap<String, Entry>, tick: u64) {
         }
         if let Some(e) = reg.get(&k) {
             if e.refcount == 0 {
-                kitty::delete_image(&mut stdout, e.kitty_id);
+                kitty::delete_image(&mut *buf, e.kitty_id);
                 reg.remove(&k);
             }
         }
     }
-    let _ = stdout.flush();
     let _ = tick;
 }
 
@@ -453,8 +461,13 @@ impl GraphicsManager {
                         }
                     };
                     let caps = TermCaps::detect().ok();
-                    let (cell_cols, cell_rows) =
-                        compute_dims(loaded.pixel_w, loaded.pixel_h, caps.as_ref(), loaded.max_cols, loaded.max_rows);
+                    let (cell_cols, cell_rows) = compute_dims(
+                        loaded.pixel_w,
+                        loaded.pixel_h,
+                        caps.as_ref(),
+                        loaded.max_cols,
+                        loaded.max_rows,
+                    );
                     let cw = caps.as_ref().map(|c| c.cell_w_px as u32).unwrap_or(8);
                     let ch = caps.as_ref().map(|c| c.cell_h_px as u32).unwrap_or(16);
 
@@ -492,8 +505,12 @@ impl GraphicsManager {
                         cell_w: cw,
                         cell_h: ch,
                     });
-                    let mut stdout = std::io::stdout().lock();
-                    transmit_at(&mut stdout, kitty_id, &data, &frames, has_anim, rect, visible);
+                    transmit_at(kitty_id, &data, &frames, has_anim, rect);
+                    // If a Place command was received before loading completed,
+                    // place the now-cached image at the target position.
+                    if visible {
+                        place_at(kitty_id, rect);
+                    }
                     debug::log_event(&debug::DebugEvent::ImageLoad {
                         ts: debug::elapsed_ms(),
                         url: key,
@@ -517,8 +534,7 @@ impl GraphicsManager {
                         (en.kitty_id, matches!(en.status, EntryStatus::Ready(..)))
                     };
                     if ready {
-                        let mut stdout = std::io::stdout().lock();
-                        place_at(&mut stdout, kitty_id, rect);
+                        place_at(kitty_id, rect);
                     }
                 }
                 Cmd::Detach { key } => {
@@ -534,9 +550,8 @@ impl GraphicsManager {
                         (en.kitty_id, matches!(en.status, EntryStatus::Ready(..)))
                     };
                     if ready {
-                        let mut stdout = std::io::stdout().lock();
-                        kitty::delete_placements(&mut stdout, kitty_id);
-                        stdout.flush().unwrap();
+                        let mut buf = PENDING_OUTPUT.lock().unwrap();
+                        kitty::delete_placements(&mut *buf, kitty_id);
                         debug::log_event(&debug::DebugEvent::KittyDelete {
                             ts: debug::elapsed_ms(),
                             id: kitty_id,
@@ -545,27 +560,24 @@ impl GraphicsManager {
                     }
                 }
                 Cmd::Release { key } => {
-                    {
-                        let mut reg = registry.lock().unwrap();
-                        if let Some(en) = reg.get_mut(&key) {
-                            en.refcount = en.refcount.saturating_sub(1);
-                            en.last_used = tick;
-                        } else {
-                            continue;
-                        }
-                        evict(&mut reg, tick);
+                    let mut reg = registry.lock().unwrap();
+                    if let Some(en) = reg.get_mut(&key) {
+                        en.refcount = en.refcount.saturating_sub(1);
+                        en.last_used = tick;
+                    } else {
+                        continue;
                     }
+                    evict(&mut reg, tick);
                 }
             }
         }
 
         // Channel closed (app exit): free every cached image in the terminal.
         if let Ok(reg) = registry.lock() {
-            let mut stdout = std::io::stdout().lock();
+            let mut buf = PENDING_OUTPUT.lock().unwrap();
             for en in reg.values() {
-                kitty::delete_image(&mut stdout, en.kitty_id);
+                kitty::delete_image(&mut *buf, en.kitty_id);
             }
-            let _ = stdout.flush();
         }
     }
 
@@ -581,15 +593,12 @@ impl GraphicsManager {
     }
 
     pub fn error(&self, key: &str) -> Option<String> {
-        self.registry
-            .lock()
-            .ok()
-            .and_then(|r| {
-                r.get(key).and_then(|e| match &e.status {
-                    EntryStatus::Error(s) => Some(s.clone()),
-                    _ => None,
-                })
+        self.registry.lock().ok().and_then(|r| {
+            r.get(key).and_then(|e| match &e.status {
+                EntryStatus::Error(s) => Some(s.clone()),
+                _ => None,
             })
+        })
     }
 }
 
@@ -619,6 +628,23 @@ pub fn dims(key: &str) -> Option<(u32, u32)> {
 
 pub fn gfx_error(key: &str) -> Option<String> {
     graphics().error(key)
+}
+
+/// Drain the pending kitty output buffer to stdout.  Must be called from the
+/// main render thread (inside the iocraft component tree) so that cursor-
+/// positioning escape sequences are written atomically with respect to
+/// iocraft/crossterm output.
+pub fn flush_output() {
+    let data = {
+        let mut buf = PENDING_OUTPUT.lock().unwrap();
+        if buf.is_empty() {
+            return;
+        }
+        std::mem::take(&mut *buf)
+    };
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(&data);
+    let _ = stdout.flush();
 }
 
 /// RAII guard that releases the image key when the component unmounts. Stored as

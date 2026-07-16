@@ -115,9 +115,9 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
             let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
-            let top_clip_rows = if y < 0 { (-y).min(img_rows) } else { 0 };
+            let top_clip_rows = if y < 0 { (-y + 1).min(img_rows) } else { 0 };
             let actual_vis_rows = (visible_rows - top_clip_rows).max(0);
-            let render_y = if y < 0 { 0 } else { y };
+            let render_y = if y < 1 { 1 } else { y };
 
             let visible = x >= 0 && actual_vis_rows > 0 && visible_cols > 0;
 

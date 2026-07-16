@@ -108,6 +108,29 @@ pub fn write_to_cropped_encoded<W: Write>(
     );
 }
 
+/// Transmit image data into the terminal's graphic store without creating a
+/// visual placement.  Uses `a=t` (transmit-only) so no image appears at the
+/// cursor — the caller can later use `a=p` to place the cached data.
+pub fn transmit_only_encoded<W: Write>(
+    w: &mut W,
+    id: u32,
+    encoded: &str,
+    cols: u32,
+    rows: u32,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+) {
+    let crop = crop_string(src_x, src_y, src_w, src_h);
+    chunked_write(
+        w,
+        &format!("a=t,f=100,t=d,i={},c={},r={}{}", id, cols, rows, crop),
+        "",
+        encoded,
+    );
+}
+
 pub fn write_animation_frames_encoded<W: Write>(w: &mut W, id: u32, frames: &[(&str, u32)]) {
     for (encoded, delay_ms) in frames {
         chunked_write(

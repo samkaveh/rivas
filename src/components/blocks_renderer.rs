@@ -3,7 +3,6 @@ use crate::components::editor::{EditorState, Mode};
 use crate::components::heading::Heading;
 use crate::components::html_block::HtmlBlock;
 use crate::components::image::Image;
-use crate::output::graphics_manager::IMAGE_HEIGHT_CACHE;
 use crate::components::list_block::ListBlock;
 use crate::components::math_block::MathBlock;
 use crate::components::mermaid_block::MermaidBlock;
@@ -13,6 +12,7 @@ use crate::components::table_block::TableBlock;
 use crate::components::thematic_break::ThematicBreak;
 use crate::debug;
 use crate::document::model::{Block, inlines_to_text};
+use crate::output::graphics_manager::IMAGE_HEIGHT_CACHE;
 use crate::theme;
 use iocraft::prelude::*;
 use std::path::PathBuf;
@@ -98,7 +98,6 @@ fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
 #[derive(Default, Props)]
 struct ScrollIntoViewContainerProps {
     pub scroll_handle: Option<Ref<ScrollViewHandle>>,
-    pub viewport_height: Option<u32>,
     pub cursor_moved: bool,
     pub child: Option<Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static>>,
 }
@@ -125,32 +124,36 @@ fn ScrollIntoViewContainer(
                     if let Some(r) = rect {
                         if let Some(scroll_ref) = &scroll_handle {
                             let mut scroll_ref = scroll_ref.clone();
-                            let block_top = r.top;
-                            let block_bottom = r.bottom;
-
                             let viewport_h = scroll_ref.read().viewport_height() as i32;
                             let content_h = scroll_ref.read().content_height() as i32;
-                            let scroll_off = scroll_ref.read().scroll_offset();
-                            let viewport_top = 1; // offset for top border
-                            let viewport_bottom = viewport_top + viewport_h;
-                            let max_offset = (content_h - viewport_h).max(0);
 
-                            if block_top < viewport_top {
-                                let diff = viewport_top - block_top;
-                                scroll_ref.write().scroll_by(-diff);
-                            } else if block_bottom > viewport_bottom {
-                                // Don't scroll down if we're already at or near the
-                                // bottom of the content — this prevents the viewport
-                                // from jumping when at the end of the document.
-                                if scroll_off < max_offset {
-                                    let diff = block_bottom - viewport_bottom;
-                                    if (r.bottom - r.top) <= viewport_h {
-                                        scroll_ref.write().scroll_by(diff);
-                                    } else {
-                                        let top_diff = block_top - viewport_top;
-                                        scroll_ref.write().scroll_by(top_diff);
+                            if viewport_h > 0 {
+                                let scroll_off = scroll_ref.read().scroll_offset();
+                                // `use_component_rect` returns *screen-space* coordinates
+                                // that already include the current scroll offset (children
+                                // are laid out with `top: -scroll_offset`). Convert back to
+                                // content space to get the block's true position in the
+                                // document, then compute an idempotent absolute target via
+                                // `scroll_to` (so a one-frame-stale rect never causes a lurch).
+                                let block_top_content = r.top + scroll_off;
+                                let block_bottom_content = r.bottom + scroll_off;
+
+                                // Keep a 1-line margin at the top so the cursor block isn't
+                                // flush against the border.
+                                let top_margin = 1;
+                                let max_offset = (content_h - viewport_h).max(0);
+
+                                let mut target = scroll_off;
+                                if block_top_content < target + top_margin {
+                                    target = (block_top_content - top_margin).max(0);
+                                } else if block_bottom_content > target + viewport_h {
+                                    // Don't scroll past the end of the document.
+                                    let bottom_target = (block_bottom_content - viewport_h).max(0);
+                                    if bottom_target < max_offset || target >= max_offset {
+                                        target = bottom_target.min(max_offset);
                                     }
                                 }
+                                scroll_ref.write().scroll_to(target);
                             }
                             needs_scroll.set(false);
                         }
@@ -547,7 +550,6 @@ pub fn BlocksRenderer(
                                                     element! {
                                                         ScrollIntoViewContainer(
                                                             scroll_handle: props.scroll_handle.clone(),
-                                                            viewport_height: props.viewport_height,
                                                             cursor_moved,
                                                             child: Some(factory),
                                                         )
@@ -731,7 +733,6 @@ pub fn BlocksRenderer(
                         element! {
                             ScrollIntoViewContainer(
                                 scroll_handle: props.scroll_handle.clone(),
-                                viewport_height: props.viewport_height,
                                 cursor_moved,
                                 child: Some(factory),
                             )
