@@ -485,7 +485,13 @@ impl GraphicsManager {
                         en.cell_cols = cell_cols;
                         en.cell_rows = cell_rows;
                         en.last_used = tick;
-                        IMAGE_HEIGHT_CACHE.set(&key, cell_cols, cell_rows);
+                        // FIX B1: Strip instance_id suffix for height cache key
+                        // so estimate_block_height() can find the stored height.
+                        let height_key = key
+                            .rsplit_once('#')
+                            .map(|(k, _)| k.to_string())
+                            .unwrap_or_else(|| key.clone());
+                        IMAGE_HEIGHT_CACHE.set(&height_key, cell_cols, cell_rows);
                         (
                             en.kitty_id,
                             en.visible,
@@ -660,5 +666,88 @@ impl Drop for ReleaseGuard {
         if !k.is_empty() {
             release(k);
         }
+    }
+}
+
+/// Return the Kitty protocol placement ID for a given graphics key, if known.
+/// Uses try_lock to avoid blocking the render thread if the background
+/// graphics thread is holding the registry lock during image loading.
+pub fn kitty_id(key: &str) -> Option<u32> {
+    graphics()
+        .registry
+        .try_lock()
+        .ok()
+        .and_then(|r| r.get(key).map(|e| e.kitty_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn height_cache_key_matches_estimator_format_for_images() {
+        let cache = ImageHeightCache::new();
+        let estimator_key = format!("{}:{}", 209, "../rivas.png");
+        assert_eq!(estimator_key, "209:../rivas.png");
+        cache.set(&estimator_key, 90, 40);
+        assert_eq!(cache.get(&estimator_key), Some((90, 40)));
+    }
+
+    #[test]
+    fn height_cache_key_matches_estimator_format_for_math() {
+        let cache = ImageHeightCache::new();
+        let estimator_key = format!("math:{}:{}:{}", 209, false, "E = mc^2");
+        assert_eq!(estimator_key, "math:209:false:E = mc^2");
+        cache.set(&estimator_key, 6, 1);
+        assert_eq!(cache.get(&estimator_key), Some((6, 1)));
+    }
+
+    #[test]
+    fn height_cache_key_matches_estimator_format_for_mermaid() {
+        let cache = ImageHeightCache::new();
+        let estimator_key = format!("mermaid:{}:{}", 209, "flowchart LR\n  A --> B");
+        cache.set(&estimator_key, 42, 3);
+        assert_eq!(cache.get(&estimator_key), Some((42, 3)));
+    }
+
+    #[test]
+    fn height_cache_store_strips_instance_id() {
+        let full_key = "209:../rivas.png#6";
+        let estimator_key = full_key
+            .rsplit_once('#')
+            .map(|(k, _)| k)
+            .unwrap_or(full_key);
+        assert_eq!(estimator_key, "209:../rivas.png");
+        let cache = ImageHeightCache::new();
+        cache.set(estimator_key, 90, 40);
+        assert_eq!(cache.get(estimator_key), Some((90, 40)));
+        assert_eq!(cache.get(full_key), None);
+    }
+
+    #[test]
+    fn height_cache_generation_increments_on_change() {
+        let cache = ImageHeightCache::new();
+        let gen0 = cache.generation();
+        cache.set("key1", 10, 5);
+        let gen1 = cache.generation();
+        assert!(gen1 > gen0);
+        cache.set("key1", 10, 5);
+        assert_eq!(cache.generation(), gen1);
+        cache.set("key1", 10, 6);
+        assert!(cache.generation() > gen1);
+    }
+
+    #[test]
+    fn height_cache_no_instance_id_in_key() {
+        let key = format!("{}:{}", 209, "../rivas.png");
+        assert!(
+            !key.contains('#'),
+            "Image height cache key should not contain instance_id"
+        );
+    }
+
+    #[test]
+    fn kitty_id_returns_none_for_unknown_key() {
+        assert_eq!(kitty_id("nonexistent"), None);
     }
 }

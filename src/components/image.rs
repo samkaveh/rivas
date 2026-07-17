@@ -1,6 +1,7 @@
 use crate::debug;
 use crate::output::graphics_manager::{
-    GfxRect, GfxSource, ReleaseGuard, acquire, detach, dims, gfx_error, place, release,
+    GfxRect, GfxSource, IMAGE_HEIGHT_CACHE, ReleaseGuard, acquire, detach, dims, gfx_error, place,
+    release,
 };
 use crate::theme;
 use iocraft::prelude::*;
@@ -24,6 +25,10 @@ pub struct ImageProps {
     pub alt: Option<String>,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    /// Current scroll offset in rows, from the owning ScrollView. When it
+    /// changes we re-run placement so a post-scroll frame with a stale canvas
+    /// rect does not leave the image detached at the wrong place.
+    pub scroll_offset: Option<i32>,
 }
 
 #[component]
@@ -35,7 +40,7 @@ pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>
                 Text(content: title, color: theme::COMMENT)
             }
             }))
-            KittyImage(url: props.url.clone(), file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
+            KittyImage(url: props.url.clone(), file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
         }
     }
 }
@@ -46,6 +51,7 @@ pub struct KittyImageProps {
     pub file_path: PathBuf,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scroll_offset: Option<i32>,
 }
 
 #[component]
@@ -57,6 +63,18 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let instance = hooks.use_ref(|| next_instance_id());
     let key = format!("{}:{}#{}", vw, props.url, *instance.read());
     let (cached_cols, cached_rows) = dims(&key).unwrap_or((0, 0));
+    // Stable layout height: the ScrollView measures `content_height` from the
+    // rendered children, and `dims()` is 0 until the image finishes loading
+    // asynchronously. Sizing the box to the live `dims()` therefore collapses
+    // it to 0 on early frames, making `content_height` volatile (which in turn
+    // makes scroll-to-bottom clamp incorrectly). Use the height cache's value
+    // (or its fallback) so the box is stable from the very first frame; the
+    // Kitty pixels are still placed using the real dimensions.
+    let cache_key = format!("{}:{}", vw, props.url);
+    let declared_rows = IMAGE_HEIGHT_CACHE
+        .get(&cache_key)
+        .map(|(_, h)| h)
+        .unwrap_or(5);
 
     let rect = hooks.use_component_rect();
     let (term_width, term_height) = hooks.use_terminal_size();
@@ -68,6 +86,15 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     let mut acquired_key = hooks.use_ref(|| String::new());
     let mut cur_key = hooks.use_ref(|| Arc::new(Mutex::new(String::new())));
     let caps_cache = hooks.use_ref(|| crate::output::capabilities::TermCaps::detect().ok());
+    // Real-layout invariant: `baseline = rect.top + scroll_offset` is constant
+    // across scrolls (the scrollable layout is just translated by the scroll
+    // offset). We capture `baseline` whenever the real canvas rect moves, then
+    // derive `y = baseline - scroll_offset` for any scroll — which is correct
+    // even on the frame where `use_component_rect()` still reports the
+    // pre-scroll position (its `top` lags the scroll).
+    let mut baseline = hooks.use_ref(|| 0i32);
+    let mut baseline_scroll = hooks.use_ref(|| 0i32);
+    let mut last_rect_y = hooks.use_ref(|| i32::MIN);
 
     let url = &props.url;
     let base_dir = props.file_path.parent();
@@ -121,7 +148,23 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     }
 
     if let Some(r) = rect {
-        let pos = (r.left, r.top);
+        let x = r.left;
+        let y_raw = r.top;
+        // Derive the correct vertical position from the scroll-invariant
+        // baseline. `baseline = y_raw + scroll_offset` is constant for the real
+        // layout, so recompute it only when the canvas rect actually moves
+        // (i.e. a fresh layout). On a stale-rect frame `y_raw` is unchanged, so
+        // we keep the last good `baseline` and apply the current scroll. This
+        // makes `y` correct even when `use_component_rect()` lags the scroll.
+        let so = props.scroll_offset.unwrap_or(*baseline_scroll.read());
+        if y_raw != *last_rect_y.read() {
+            *baseline.write() = y_raw + so;
+            *baseline_scroll.write() = so;
+            *last_rect_y.write() = y_raw;
+        }
+        let y = *baseline.read() - so;
+
+        let pos = (x, y);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
@@ -129,7 +172,6 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
             let img_cols = *cols.read() as i32;
             let img_rows = *rows.read() as i32;
 
-            let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
             let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
@@ -207,6 +249,6 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
         }
         .into_any()
     } else {
-        element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+        element! {View(width: cols.read().clone().max(1), height: declared_rows.max(1))}.into_any()
     }
 }

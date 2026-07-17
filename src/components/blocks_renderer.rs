@@ -52,7 +52,7 @@ fn head_to_width(s: &str, max: usize) -> String {
 }
 
 // Estimate the height of a block in terminal rows
-fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
+pub fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
     let wrap_width = vw.unwrap_or(80) as usize;
     match block {
         Block::Heading { .. } => 2,
@@ -95,6 +95,16 @@ fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
     }
 }
 
+/// Compute the total estimated content height from all blocks.
+/// Used by navigation commands (G, ctrl+d, ctrl+u) to bypass the ScrollView's
+/// content_height which fluctuates with virtual scrolling.
+pub fn total_content_height(blocks: &[Block], content: &str, vw: Option<u32>) -> u32 {
+    blocks
+        .iter()
+        .map(|b| estimate_block_height(b, content, vw))
+        .sum()
+}
+
 #[derive(Default, Props)]
 struct ScrollIntoViewContainerProps {
     pub scroll_handle: Option<Ref<ScrollViewHandle>>,
@@ -108,60 +118,83 @@ fn ScrollIntoViewContainer(
     mut hooks: Hooks,
 ) -> impl Into<AnyElement<'static>> {
     let rect = hooks.use_component_rect();
-    let mut needs_scroll = hooks.use_state(|| false);
+    let mut pending = hooks.use_state(|| false);
 
     if props.cursor_moved {
-        needs_scroll.set(true);
+        pending.set(true);
+    }
+
+    // Baseline invariant: `use_component_rect()` is measured from the *previous*
+    // frame and is therefore one scroll-step stale. `rect.top + scroll_off`
+    // recovers the block's true content-row position, but while a scroll is in
+    // flight `rect.top` still reflects the old layout, so the sum is wrong for a
+    // single frame. We capture the invariant only once `rect.top` actually
+    // settles (changes), so a mid-flight stale rect never feeds a bogus target
+    // and the auto-scroll converges in one step instead of oscillating.
+    let mut baseline = hooks.use_state(|| None::<(i32, i32)>);
+    let mut last_rect_top = hooks.use_state(|| i32::MIN);
+    if let Some(r) = rect {
+        if r.top != last_rect_top.get() {
+            if let Some(scroll_ref) = &props.scroll_handle {
+                let scroll_off = scroll_ref.read().scroll_offset();
+                let top = r.top + scroll_off;
+                let bottom = r.bottom + scroll_off;
+                baseline.set(Some((top, bottom)));
+                last_rect_top.set(r.top);
+            }
+        }
     }
 
     hooks.use_effect(
         {
-            let mut needs_scroll = needs_scroll.clone();
-            let rect = rect.clone();
+            let mut pending = pending.clone();
             let scroll_handle = props.scroll_handle.clone();
+            let baseline = baseline.clone();
             move || {
-                if needs_scroll.get() {
-                    if let Some(r) = rect {
-                        if let Some(scroll_ref) = &scroll_handle {
-                            let mut scroll_ref = scroll_ref.clone();
-                            let viewport_h = scroll_ref.read().viewport_height() as i32;
-                            let content_h = scroll_ref.read().content_height() as i32;
+                // Only consume the pending request once we actually have a
+                // baseline (i.e. `use_component_rect` has reported at least one
+                // real frame for this element). A freshly mounted cursor block
+                // gets its first rect a frame after `cursor_moved`, so retrying
+                // here is what makes `j`/`k` scroll the view to follow the
+                // cursor instead of silently doing nothing.
+                if pending.get() && baseline.get().is_some() {
+                    if let (Some(scroll_ref), Some((block_top_content, block_bottom_content))) =
+                        (&scroll_handle, baseline.get())
+                    {
+                        let mut scroll_ref = scroll_ref.clone();
+                        let viewport_h = scroll_ref.read().viewport_height() as i32;
+                        let content_h = scroll_ref.read().content_height() as i32;
 
-                            if viewport_h > 0 {
-                                let scroll_off = scroll_ref.read().scroll_offset();
-                                // `use_component_rect` returns *screen-space* coordinates
-                                // that already include the current scroll offset (children
-                                // are laid out with `top: -scroll_offset`). Convert back to
-                                // content space to get the block's true position in the
-                                // document, then compute an idempotent absolute target via
-                                // `scroll_to` (so a one-frame-stale rect never causes a lurch).
-                                let block_top_content = r.top + scroll_off;
-                                let block_bottom_content = r.bottom + scroll_off;
+                        if viewport_h > 0 {
+                            let scroll_off = scroll_ref.read().scroll_offset();
+                            let top_margin = 1;
+                            let max_offset = (content_h - viewport_h).max(0);
 
-                                // Keep a 1-line margin at the top so the cursor block isn't
-                                // flush against the border.
-                                let top_margin = 1;
-                                let max_offset = (content_h - viewport_h).max(0);
-
-                                let mut target = scroll_off;
-                                if block_top_content < target + top_margin {
-                                    target = (block_top_content - top_margin).max(0);
-                                } else if block_bottom_content > target + viewport_h {
-                                    // Don't scroll past the end of the document.
-                                    let bottom_target = (block_bottom_content - viewport_h).max(0);
-                                    if bottom_target < max_offset || target >= max_offset {
-                                        target = bottom_target.min(max_offset);
-                                    }
+                            let mut target = scroll_off;
+                            if block_top_content < target + top_margin {
+                                target = (block_top_content - top_margin).max(0);
+                            } else if block_bottom_content > target + viewport_h {
+                                let bottom_target = (block_bottom_content - viewport_h).max(0);
+                                if bottom_target < max_offset || target >= max_offset {
+                                    target = bottom_target.min(max_offset);
                                 }
-                                scroll_ref.write().scroll_to(target);
                             }
-                            needs_scroll.set(false);
+                            scroll_ref.write().scroll_to(target);
+                            debug::log_event(&debug::DebugEvent::CursorScroll {
+                                ts: debug::elapsed_ms(),
+                                block_top: block_top_content,
+                                block_bottom: block_bottom_content,
+                                scroll_off,
+                                target,
+                                viewport_h,
+                            });
                         }
+                        pending.set(false);
                     }
                 }
             }
         },
-        (needs_scroll.get(), rect.is_some()),
+        (pending.get(), baseline.get()),
     );
 
     element! {
@@ -261,14 +294,21 @@ pub fn BlocksRenderer(
     let scroll_offset = props.scroll_offset.unwrap_or(0).max(0) as u32;
     let viewport_h = props.viewport_height.unwrap_or(24);
     let buffer = viewport_h * 2;
-    let (heights, starts) = &*cum_data.read();
+    let (heights, starts) = {
+        let d = cum_data.read();
+        (d.0.clone(), d.1.clone())
+    };
 
-    let first_visible = heights
-        .partition_point(|&h| h < scroll_offset.saturating_sub(buffer))
-        .min(block_counts);
-    let last_visible = heights
-        .partition_point(|&h| h <= scroll_offset + viewport_h + buffer)
-        .min(block_counts);
+    // NOTE: Virtualization is intentionally disabled. Skipping off-screen blocks
+    // and replacing them with estimated-height spacers made `ScrollView`'s
+    // *measured* `content_height` diverge from the true document height (real
+    // graphic heights only count for rendered blocks, estimate fallback for the
+    // rest), which broke `G`/`End` bottom-pinning and `j`/`k` view-following.
+    // Rendering all blocks keeps `content_height` authoritative, so the native
+    // `scroll_to_bottom()` and auto-scroll are correct. The document is small
+    // enough that rendering every block is cheap.
+    let first_visible = 0usize;
+    let last_visible = block_counts;
 
     // Binary search for cursor block using cached start offsets
     let cursor_block_idx = cursor_offset
@@ -295,6 +335,11 @@ pub fn BlocksRenderer(
                         col: s.col,
                     },
                     scroll: props.scroll_offset.unwrap_or(0),
+                    content_height: props
+                        .scroll_handle
+                        .as_ref()
+                        .map(|h| h.read().content_height() as i32)
+                        .unwrap_or(0),
                     viewport: debug::ViewportInfo {
                         w: vw.unwrap_or(80),
                         h: vh.unwrap_or(24),
@@ -574,13 +619,13 @@ pub fn BlocksRenderer(
                         Block::Heading { level, content, id: _, .. } => element!{Heading(level: *level, content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::Paragraph { content, .. } => element!{Paragraph(content: content.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::Code { language, code, .. } => element!{CodeBlock(language: language.clone(), code: code.clone())}.into_any(),
-                        Block::Mermaid { source, .. } => element!{MermaidBlock(source: source.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
-                        Block::Math { content, display, .. } => element!{MathBlock(content: content.clone(), display: *display, viewport_height: vh, viewport_width: vw)}.into_any(),
+                        Block::Mermaid { source, .. } => element!{MermaidBlock(source: source.clone(), viewport_height: vh, viewport_width: vw, scroll_offset: Some(scroll_offset as i32))}.into_any(),
+                        Block::Math { content, display, .. } => element!{MathBlock(content: content.clone(), display: *display, viewport_height: vh, viewport_width: vw, scroll_offset: Some(scroll_offset as i32))}.into_any(),
                         Block::Quote { children, .. } => element!{QuoteBlock(children: children.clone(), file_path: Some(file_path.clone()), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::List { ordered, start, items, .. } => element!{ListBlock(ordered: *ordered, start: *start, items: items.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::Table { headers, alignments, rows, .. } => element!{TableBlock(headers: headers.clone(), alignments: alignments.clone(), rows: rows.clone(), file_path: file_path.clone(), viewport_height: vh, viewport_width: vw)}.into_any(),
                         Block::ThematicBreak{..} => element!{ThematicBreak()}.into_any(),
-                        Block::Image { alt, url, title, .. } => element!{Image(url: url.clone(), file_path: file_path.clone(), title: title.clone(), alt: Some(alt.clone()), viewport_height: vh, viewport_width: vw)}.into_any(),
+                        Block::Image { alt, url, title, .. } => element!{Image(url: url.clone(), file_path: file_path.clone(), title: title.clone(), alt: Some(alt.clone()), viewport_height: vh, viewport_width: vw, scroll_offset: Some(scroll_offset as i32))}.into_any(),
                         Block::Html { content, .. } => element!{HtmlBlock(content: content.clone())}.into_any(),
                     };
 
@@ -689,18 +734,19 @@ pub fn BlocksRenderer(
                         let before_win = tail_to_width(&before_str, before_keep);
                         let after_win = head_to_width(&after_str, after_keep);
 
+                        let so = scroll_offset as i32;
                         let factory: Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static> = Arc::new(move || {
                             let rendered = match &block_clone {
                                 Block::Heading { level, content, id: _, .. } => element!{Heading(level: *level, content: content.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
                                 Block::Paragraph { content, .. } => element!{Paragraph(content: content.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
                                 Block::Code { language, code, .. } => element!{CodeBlock(language: language.clone(), code: code.clone())}.into_any(),
-                                Block::Mermaid { source, .. } => element!{MermaidBlock(source: source.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
-                                Block::Math { content, display, .. } => element!{MathBlock(content: content.clone(), display: *display, viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Mermaid { source, .. } => element!{MermaidBlock(source: source.clone(), viewport_height: vh_clone, viewport_width: vw_clone, scroll_offset: Some(so))}.into_any(),
+                                Block::Math { content, display, .. } => element!{MathBlock(content: content.clone(), display: *display, viewport_height: vh_clone, viewport_width: vw_clone, scroll_offset: Some(so))}.into_any(),
                                 Block::Quote { children, .. } => element!{QuoteBlock(children: children.clone(), file_path: Some(file_path_clone.clone()), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
                                 Block::List { ordered, start, items, .. } => element!{ListBlock(ordered: *ordered, start: *start, items: items.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
                                 Block::Table { headers, alignments, rows, .. } => element!{TableBlock(headers: headers.clone(), alignments: alignments.clone(), rows: rows.clone(), file_path: file_path_clone.clone(), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
                                 Block::ThematicBreak{..} => element!{ThematicBreak()}.into_any(),
-                                Block::Image { alt, url, title, .. } => element!{Image(url: url.clone(), file_path: file_path_clone.clone(), title: title.clone(), alt: Some(alt.clone()), viewport_height: vh_clone, viewport_width: vw_clone)}.into_any(),
+                                Block::Image { alt, url, title, .. } => element!{Image(url: url.clone(), file_path: file_path_clone.clone(), title: title.clone(), alt: Some(alt.clone()), viewport_height: vh_clone, viewport_width: vw_clone, scroll_offset: Some(so))}.into_any(),
                                 Block::Html { content, .. } => element!{HtmlBlock(content: content.clone())}.into_any(),
                             };
 
@@ -743,5 +789,212 @@ pub fn BlocksRenderer(
                 }
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::model::*;
+
+    #[test]
+    fn estimate_heading_height() {
+        let block = Block::Heading {
+            level: 1,
+            content: vec![Inline::Text("Hello".to_string())],
+            id: "hello".to_string(),
+            span: (0, 10),
+        };
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 2);
+    }
+
+    #[test]
+    fn estimate_paragraph_height_wraps() {
+        // 160 chars at wrap_width=80 → 2 rows
+        let long_text = "a".repeat(160);
+        let block = Block::Paragraph {
+            content: vec![Inline::Text(long_text)],
+            span: (0, 160),
+        };
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 2);
+    }
+
+    #[test]
+    fn estimate_paragraph_short_fits_one_row() {
+        let block = Block::Paragraph {
+            content: vec![Inline::Text("short".to_string())],
+            span: (0, 5),
+        };
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 1);
+    }
+
+    #[test]
+    fn estimate_code_block_height() {
+        let block = Block::Code {
+            language: Some("rust".to_string()),
+            code: "fn main() {\n    println!(\"hi\");\n}".to_string(),
+            span: (0, 30),
+        };
+        // 3 lines of code + 2 (language label + padding)
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 5);
+    }
+
+    #[test]
+    fn estimate_table_height() {
+        let block = Block::Table {
+            headers: vec![TableCell {
+                content: vec![Inline::Text("A".to_string())],
+            }],
+            alignments: vec![Alignment::Left],
+            rows: vec![
+                vec![TableCell {
+                    content: vec![Inline::Text("1".to_string())],
+                }],
+                vec![TableCell {
+                    content: vec![Inline::Text("2".to_string())],
+                }],
+            ],
+            span: (0, 20),
+        };
+        // header + 2 rows = 3
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 3);
+    }
+
+    #[test]
+    fn estimate_list_height() {
+        let block = Block::List {
+            ordered: false,
+            start: None,
+            items: vec![
+                ListItem {
+                    checked: None,
+                    content: vec![Block::Paragraph {
+                        content: vec![],
+                        span: (0, 5),
+                    }],
+                },
+                ListItem {
+                    checked: None,
+                    content: vec![Block::Paragraph {
+                        content: vec![],
+                        span: (6, 10),
+                    }],
+                },
+            ],
+            span: (0, 10),
+        };
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 2);
+    }
+
+    #[test]
+    fn estimate_thematic_break() {
+        let block = Block::ThematicBreak { span: (0, 3) };
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 1);
+    }
+
+    #[test]
+    fn total_content_height_empty() {
+        assert_eq!(total_content_height(&[], "", Some(80)), 0);
+    }
+
+    #[test]
+    fn total_content_height_sums_blocks() {
+        let blocks = vec![
+            Block::Heading {
+                level: 1,
+                content: vec![],
+                id: String::new(),
+                span: (0, 10),
+            },
+            Block::Paragraph {
+                content: vec![],
+                span: (11, 20),
+            },
+            Block::ThematicBreak { span: (21, 24) },
+        ];
+        // Heading=2, Paragraph=1 (empty text), ThematicBreak=1
+        assert_eq!(total_content_height(&blocks, "", Some(80)), 4);
+    }
+
+    #[test]
+    fn total_content_height_matches_scroll_to_bottom_target() {
+        // This verifies that G's target matches what the ScrollView
+        // would compute for content_height (for a document with no images)
+        let blocks = vec![
+            Block::Heading {
+                level: 1,
+                content: vec![Inline::Text("Title".to_string())],
+                id: String::new(),
+                span: (0, 10),
+            },
+            Block::Paragraph {
+                content: vec![Inline::Text("Some text".to_string())],
+                span: (11, 20),
+            },
+        ];
+        let total = total_content_height(&blocks, "", Some(80));
+        let viewport = 45;
+        let target = (total as i32 - viewport as i32).max(0);
+        // Heading=2 + Paragraph=1 = 3 total, target = max(0, 3-45) = 0
+        assert_eq!(target, 0);
+    }
+
+    #[test]
+    fn total_content_height_large_document() {
+        // Simulate a document with many blocks
+        let mut blocks = Vec::new();
+        for i in 0..50 {
+            blocks.push(Block::Paragraph {
+                content: vec![Inline::Text(format!("Paragraph {}", i))],
+                span: (i * 20, (i + 1) * 20),
+            });
+        }
+        let total = total_content_height(&blocks, "", Some(80));
+        // 50 paragraphs, each 1 row (short text)
+        assert_eq!(total, 50);
+    }
+
+    #[test]
+    fn scroll_to_bottom_target_calculation() {
+        // Verify the exact formula used by G
+        let blocks = vec![
+            Block::Heading {
+                level: 1,
+                content: vec![],
+                id: String::new(),
+                span: (0, 10),
+            },
+            Block::Paragraph {
+                content: vec![],
+                span: (11, 20),
+            },
+            Block::Code {
+                language: None,
+                code: "line1\nline2\nline3".to_string(),
+                span: (21, 40),
+            },
+        ];
+        let total = total_content_height(&blocks, "", Some(80));
+        let viewport = 45;
+        let target = (total as i32 - viewport as i32).max(0);
+        // Heading=2, Paragraph=1, Code=5 (3 lines + 2)
+        assert_eq!(total, 8);
+        assert_eq!(target, 0); // 8 < 45, so no scrolling needed
+    }
+
+    #[test]
+    fn scroll_to_bottom_target_with_many_blocks() {
+        let mut blocks = Vec::new();
+        for i in 0..100 {
+            blocks.push(Block::Paragraph {
+                content: vec![Inline::Text(format!("Block {}", i))],
+                span: (i * 15, (i + 1) * 15),
+            });
+        }
+        let total = total_content_height(&blocks, "", Some(80));
+        let viewport = 45;
+        let target = (total as i32 - viewport as i32).max(0);
+        // 100 paragraphs × 1 row each = 100, target = 100-45 = 55
+        assert_eq!(target, 55);
     }
 }

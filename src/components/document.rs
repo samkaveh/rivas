@@ -90,9 +90,55 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     let _keyboard_navigation = props.keyboard_navigation.unwrap_or(true);
     let scroll_handle = hooks.use_ref_default::<ScrollViewHandle>();
     let mut pending_g = hooks.use_state(|| false);
+    // `stick_to_bottom` is set when the user presses `G`/`End`. Because the
+    // document's *measured* content height can still grow after that press
+    // (async Kitty image/graphic loads increase `ScrollView`'s measured
+    // height), a single `scroll_to_bottom()` can land short of the true end.
+    // We re-pin to the bottom on every frame until the viewport is actually at
+    // the measured bottom, then clear the intent.
+    let mut stick_to_bottom = hooks.use_state(|| false);
     let _follow_ref = props.follow_ref;
     let on_change = props.on_change.clone();
     let on_quit = props.on_quit.clone();
+
+    // Re-pin to the bottom while `stick_to_bottom` is set. Runs every render so
+    // that once the (async, image-loaded) measured content height grows, the
+    // viewport catches up to the true end instead of stopping short. When the
+    // viewport is already at the measured bottom the intent is cleared.
+    hooks.use_effect(
+        {
+            let mut scroll_handle = scroll_handle.clone();
+            let mut stick_to_bottom = stick_to_bottom.clone();
+            move || {
+                if !stick_to_bottom.get() {
+                    return;
+                }
+                // Use the measured content height. With virtualization disabled,
+                // `ScrollView` always measures the full document, so this is the
+                // true total and `scroll_to_bottom` lands exactly at the end even
+                // as async graphic loads grow the content.
+                let content_h = scroll_handle.read().content_height() as i32;
+                let vph = scroll_handle.read().viewport_height() as i32;
+                let off = scroll_handle.read().scroll_offset();
+                let target = (content_h - vph).max(0);
+                let at_bottom = off >= target;
+                debug::log_event(&debug::DebugEvent::StickBottom {
+                    ts: debug::elapsed_ms(),
+                    active: stick_to_bottom.get(),
+                    content_h,
+                    off,
+                    target,
+                    repin: !at_bottom,
+                });
+                if at_bottom {
+                    stick_to_bottom.set(false);
+                } else {
+                    scroll_handle.write().scroll_to_bottom();
+                }
+            }
+        },
+        (scroll_handle.read().scroll_offset(),),
+    );
 
     hooks.use_terminal_events({
         let mut scroll_handle = scroll_handle;
@@ -163,6 +209,13 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 .as_ref()
                 .map(|s| s.mode.clone())
                 .unwrap_or(Mode::Normal);
+            // `G`/`End` pin the cursor to the bottom of the document. We use
+            // iocraft's *actually measured* content height (via
+            // `scroll_to_bottom`) rather than the editor's estimated block-height
+            // table, because the estimate over-states the real layout and would
+            // scroll past the true end, leaving the cursor off-screen below the
+            // viewport. The trailing phantom spacer was removed so `content_height`
+            // reflects the real document.
             if !matches!(
                 current_mode,
                 Mode::Insert | Mode::Command | Mode::Search { .. }
@@ -178,10 +231,12 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     KeyCode::Char('G') if !ctrl => {
                         scroll_handle.write().scroll_to_bottom();
                         pending_g.set(false);
+                        stick_to_bottom.set(true);
                     }
                     KeyCode::End => {
                         scroll_handle.write().scroll_to_bottom();
                         pending_g.set(false);
+                        stick_to_bottom.set(true);
                     }
                     KeyCode::Char('d') if ctrl => {
                         scroll_handle.write().scroll_by(half_page);
@@ -255,7 +310,6 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         debug: props.debug,
                         debug_annotations: props.debug_annotations,
                     )
-                    View(height: (vh.unwrap_or(24) / 3).max(5)) {}
                     }
                 }
             }
