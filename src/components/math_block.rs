@@ -1,6 +1,7 @@
 use crate::debug;
 use crate::output::graphics_manager::{
-    GfxRect, GfxSource, ReleaseGuard, acquire, detach, dims, gfx_error, place, release,
+    GfxRect, GfxSource, IMAGE_HEIGHT_CACHE, ReleaseGuard, acquire, detach, dims, gfx_error, place,
+    release,
 };
 use crate::theme;
 use iocraft::prelude::*;
@@ -21,13 +22,17 @@ pub struct MathBlockProps {
     pub display: bool,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    /// Current scroll offset in rows, from the owning ScrollView. When it
+    /// changes we re-run placement so a post-scroll frame with a stale canvas
+    /// rect does not leave the image detached at the wrong place.
+    pub scroll_offset: Option<i32>,
 }
 
 #[component]
 pub fn MathBlock(props: &MathBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     element! {
         View(margin_bottom: 1) {
-            KittyMath(content: props.content.clone(), display: props.display.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width)
+            KittyMath(content: props.content.clone(), display: props.display.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
         }
     }
 }
@@ -38,6 +43,7 @@ pub struct KittyMathProps {
     pub display: bool,
     pub viewport_height: Option<u32>,
     pub viewport_width: Option<u32>,
+    pub scroll_offset: Option<i32>,
 }
 
 #[component]
@@ -54,6 +60,13 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
         props.content,
         *instance.read()
     );
+    // Stable layout height (see image.rs for rationale): size the box from the
+    // height cache so it never collapses to 0 while the formula is loading.
+    let cache_key = format!("math:{}:{}:{}", vw, props.display, props.content);
+    let declared_rows = IMAGE_HEIGHT_CACHE
+        .get(&cache_key)
+        .map(|(_, h)| h)
+        .unwrap_or(if props.display { 2 } else { 1 });
     let (cached_cols, cached_rows) = dims(&key).unwrap_or((0, 0));
 
     let rect = hooks.use_component_rect();
@@ -66,6 +79,13 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     let mut acquired_key = hooks.use_ref(|| String::new());
     let mut cur_key = hooks.use_ref(|| Arc::new(Mutex::new(String::new())));
     let caps_cache = hooks.use_ref(|| crate::output::capabilities::TermCaps::detect().ok());
+    // Real-layout invariant: `baseline = rect.top + scroll_offset` is constant
+    // across scrolls. Captured when the real canvas rect moves; `y` is then
+    // `baseline - scroll_offset`, correct even when `use_component_rect()` lags
+    // the scroll.
+    let mut baseline = hooks.use_ref(|| 0i32);
+    let mut baseline_scroll = hooks.use_ref(|| 0i32);
+    let mut last_rect_y = hooks.use_ref(|| i32::MIN);
 
     if acquired_key.read().is_empty() || *acquired_key.read() != key {
         if !acquired_key.read().is_empty() {
@@ -112,7 +132,23 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
     }
 
     if let Some(r) = rect {
-        let pos = (r.left, r.top);
+        let x = r.left;
+        let y_raw = r.top;
+        // Derive the correct vertical position from the scroll-invariant
+        // baseline. `baseline = y_raw + scroll_offset` is constant for the real
+        // layout, so recompute it only when the canvas rect actually moves.
+        // On a stale-rect frame `y_raw` is unchanged, so we keep the last good
+        // `baseline` and apply the current scroll. This makes `y` correct even
+        // when `use_component_rect()` lags the scroll.
+        let so = props.scroll_offset.unwrap_or(*baseline_scroll.read());
+        if y_raw != *last_rect_y.read() {
+            *baseline.write() = y_raw + so;
+            *baseline_scroll.write() = so;
+            *last_rect_y.write() = y_raw;
+        }
+        let y = *baseline.read() - so;
+
+        let pos = (x, y);
         if pos != drawn_at.get() {
             drawn_at.set(pos);
 
@@ -120,7 +156,6 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
             let img_cols = *cols.read() as i32;
             let img_rows = *rows.read() as i32;
 
-            let (x, y) = pos;
             let visible_cols = img_cols.min(term_width as i32 - x).max(0);
             let visible_rows = img_rows.min(term_height as i32 - y - 3).max(0);
 
@@ -200,6 +235,6 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
         }
         .into_any()
     } else {
-        element! {View(width: cols.read().clone(), height: rows.read().clone())}.into_any()
+        element! {View(width: cols.read().clone().max(1), height: declared_rows.max(1))}.into_any()
     }
 }

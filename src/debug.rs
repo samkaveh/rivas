@@ -83,6 +83,7 @@ pub enum DebugEvent {
         ts: u128,
         cursor: CursorPos,
         scroll: i32,
+        content_height: i32,
         viewport: ViewportInfo,
         blocks: usize,
         mode: String,
@@ -120,6 +121,24 @@ pub enum DebugEvent {
     },
     #[serde(rename = "scroll")]
     Scroll { ts: u128, old: i32, new: i32 },
+    #[serde(rename = "stick_bottom")]
+    StickBottom {
+        ts: u128,
+        active: bool,
+        content_h: i32,
+        off: i32,
+        target: i32,
+        repin: bool,
+    },
+    #[serde(rename = "cursor_scroll")]
+    CursorScroll {
+        ts: u128,
+        block_top: i32,
+        block_bottom: i32,
+        scroll_off: i32,
+        target: i32,
+        viewport_h: i32,
+    },
     // ── Kitty protocol events ──────────────────────────────────────────────────
     #[serde(rename = "kitty_transmit")]
     KittyTransmit {
