@@ -99,7 +99,8 @@ pub fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u
 /// Used by navigation commands (G, ctrl+d, ctrl+u) to bypass the ScrollView's
 /// content_height which fluctuates with virtual scrolling.
 pub fn total_content_height(blocks: &[Block], content: &str, vw: Option<u32>) -> u32 {
-    blocks.iter()
+    blocks
+        .iter()
         .map(|b| estimate_block_height(b, content, vw))
         .sum()
 }
@@ -841,11 +842,17 @@ mod tests {
     #[test]
     fn estimate_table_height() {
         let block = Block::Table {
-            headers: vec![TableCell { content: vec![Inline::Text("A".to_string())] }],
+            headers: vec![TableCell {
+                content: vec![Inline::Text("A".to_string())],
+            }],
             alignments: vec![Alignment::Left],
             rows: vec![
-                vec![TableCell { content: vec![Inline::Text("1".to_string())] }],
-                vec![TableCell { content: vec![Inline::Text("2".to_string())] }],
+                vec![TableCell {
+                    content: vec![Inline::Text("1".to_string())],
+                }],
+                vec![TableCell {
+                    content: vec![Inline::Text("2".to_string())],
+                }],
             ],
             span: (0, 20),
         };
@@ -859,8 +866,20 @@ mod tests {
             ordered: false,
             start: None,
             items: vec![
-                ListItem { checked: None, content: vec![Block::Paragraph { content: vec![], span: (0, 5) }] },
-                ListItem { checked: None, content: vec![Block::Paragraph { content: vec![], span: (6, 10) }] },
+                ListItem {
+                    checked: None,
+                    content: vec![Block::Paragraph {
+                        content: vec![],
+                        span: (0, 5),
+                    }],
+                },
+                ListItem {
+                    checked: None,
+                    content: vec![Block::Paragraph {
+                        content: vec![],
+                        span: (6, 10),
+                    }],
+                },
             ],
             span: (0, 10),
         };
@@ -881,8 +900,16 @@ mod tests {
     #[test]
     fn total_content_height_sums_blocks() {
         let blocks = vec![
-            Block::Heading { level: 1, content: vec![], id: String::new(), span: (0, 10) },
-            Block::Paragraph { content: vec![], span: (11, 20) },
+            Block::Heading {
+                level: 1,
+                content: vec![],
+                id: String::new(),
+                span: (0, 10),
+            },
+            Block::Paragraph {
+                content: vec![],
+                span: (11, 20),
+            },
             Block::ThematicBreak { span: (21, 24) },
         ];
         // Heading=2, Paragraph=1 (empty text), ThematicBreak=1
@@ -894,8 +921,16 @@ mod tests {
         // This verifies that G's target matches what the ScrollView
         // would compute for content_height (for a document with no images)
         let blocks = vec![
-            Block::Heading { level: 1, content: vec![Inline::Text("Title".to_string())], id: String::new(), span: (0, 10) },
-            Block::Paragraph { content: vec![Inline::Text("Some text".to_string())], span: (11, 20) },
+            Block::Heading {
+                level: 1,
+                content: vec![Inline::Text("Title".to_string())],
+                id: String::new(),
+                span: (0, 10),
+            },
+            Block::Paragraph {
+                content: vec![Inline::Text("Some text".to_string())],
+                span: (11, 20),
+            },
         ];
         let total = total_content_height(&blocks, "", Some(80));
         let viewport = 45;
@@ -923,9 +958,21 @@ mod tests {
     fn scroll_to_bottom_target_calculation() {
         // Verify the exact formula used by G
         let blocks = vec![
-            Block::Heading { level: 1, content: vec![], id: String::new(), span: (0, 10) },
-            Block::Paragraph { content: vec![], span: (11, 20) },
-            Block::Code { language: None, code: "line1\nline2\nline3".to_string(), span: (21, 40) },
+            Block::Heading {
+                level: 1,
+                content: vec![],
+                id: String::new(),
+                span: (0, 10),
+            },
+            Block::Paragraph {
+                content: vec![],
+                span: (11, 20),
+            },
+            Block::Code {
+                language: None,
+                code: "line1\nline2\nline3".to_string(),
+                span: (21, 40),
+            },
         ];
         let total = total_content_height(&blocks, "", Some(80));
         let viewport = 45;

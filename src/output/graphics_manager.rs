@@ -713,7 +713,10 @@ mod tests {
     #[test]
     fn height_cache_store_strips_instance_id() {
         let full_key = "209:../rivas.png#6";
-        let estimator_key = full_key.rsplit_once('#').map(|(k, _)| k).unwrap_or(full_key);
+        let estimator_key = full_key
+            .rsplit_once('#')
+            .map(|(k, _)| k)
+            .unwrap_or(full_key);
         assert_eq!(estimator_key, "209:../rivas.png");
         let cache = ImageHeightCache::new();
         cache.set(estimator_key, 90, 40);
