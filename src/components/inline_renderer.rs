@@ -1,6 +1,7 @@
 use crate::components::image::KittyImage;
-use crate::components::math_block::KittyMath;
+use crate::components::math_block::{KittyMath, UnicodeMath};
 use crate::document::model::Inline;
+use crate::assets::math::{MathMode, math_mode};
 use crate::theme;
 use iocraft::prelude::*;
 use std::path::PathBuf;
@@ -116,9 +117,15 @@ fn render_inlines_recursive(
                 out.push(element! { Text(content: "\n".to_string(), color: color) }.into_any());
             }
             Inline::Math(m) => {
-                out.push(element! {
-                    KittyMath(content: m.clone(), display: false, viewport_height: viewport_height, viewport_width: viewport_width)
-                }.into_any());
+                if math_mode() == MathMode::Image {
+                    out.push(element! {
+                        KittyMath(content: m.clone(), display: false, viewport_height: viewport_height, viewport_width: viewport_width)
+                    }.into_any());
+                } else {
+                    out.push(element! {
+                        UnicodeMath(content: m.clone(), display: false)
+                    }.into_any());
+                }
             }
             Inline::Image { alt: _, url } => {
                 // For inline images, we use KittyImage directly without block margins

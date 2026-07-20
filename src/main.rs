@@ -49,6 +49,11 @@ struct Cli {
     /// Show debug layout annotations (visual overlay boxes). Can combine with --debug or --debug-json-only
     #[arg(long)]
     debug_annotations: bool,
+    /// Math rendering mode. `unicode` (default) shows formulas as Unicode
+    /// glyphs that work in any terminal. `image` rasterizes them via the Kitty
+    /// graphics protocol for pixel-perfect layout (needs Kitty/WezTerm/Ghostty).
+    #[arg(long, value_enum, default_value_t = crate::assets::math::MathMode::Unicode)]
+    math: crate::assets::math::MathMode,
 }
 
 /// Whether debug JSON logging is enabled (from --debug or --debug-json-only)
@@ -65,6 +70,7 @@ fn main() -> Result<()> {
     env_logger::init();
     let cli = Cli::parse();
     debug::init(debug_json_enabled(&cli), debug_annotations_enabled(&cli));
+    crate::assets::math::set_math_mode(cli.math);
 
     let (mut content, mut file_path) = match &cli.file {
         // CASE 1: User provided a path
@@ -100,8 +106,15 @@ fn main() -> Result<()> {
 
     // Terminal capability check
     let caps = output::capabilities::TermCaps::detect()?;
+    if !caps.has_kitty && cli.math == crate::assets::math::MathMode::Image {
+        anyhow::bail!(
+            "Image math mode requires a Kitty-compatible terminal (Kitty, WezTerm, Ghostty)."
+        )
+    }
     if !caps.has_kitty {
-        anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
+        log::warn!(
+            "Terminal does not support Kitty graphics; images and diagrams will not render."
+        );
     }
 
     let action = Arc::new(Mutex::new(AppAction::Quit));

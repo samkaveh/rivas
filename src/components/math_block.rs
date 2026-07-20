@@ -1,3 +1,6 @@
+use crate::assets::math::{
+    MathMode, MathRender, bracket_glyphs, math_mode, render_math_unicode_ast,
+};
 use crate::debug;
 use crate::output::graphics_manager::{
     GfxRect, GfxSource, IMAGE_HEIGHT_CACHE, ReleaseGuard, acquire, detach, dims, gfx_error, place,
@@ -30,11 +33,152 @@ pub struct MathBlockProps {
 
 #[component]
 pub fn MathBlock(props: &MathBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
-    element! {
-        View(margin_bottom: 1) {
-            KittyMath(content: props.content.clone(), display: props.display.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
+    if math_mode() == MathMode::Image {
+        element! {
+            View(margin_bottom: 1) {
+                KittyMath(content: props.content.clone(), display: props.display.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
+            }
+        }
+        .into_any()
+    } else {
+        element! {
+            UnicodeMath(content: props.content.clone(), display: props.display.clone())
+        }
+        .into_any()
+    }
+}
+
+/// Image-free math renderer: converts LaTeX to Unicode glyphs and shows them
+/// as plain terminal text. Matrices are laid out structurally via
+/// [`MatrixMath`] so borders stay aligned. Used when `math_mode()` is
+/// `Unicode` (the default).
+#[derive(Default, Props)]
+pub struct UnicodeMathProps {
+    pub content: String,
+    pub display: bool,
+}
+
+#[component]
+pub fn UnicodeMath(props: &UnicodeMathProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let render = render_math_unicode_ast(&props.content);
+    match render {
+        MathRender::Text(text) => {
+            if props.display {
+                element! {
+                    View(margin_bottom: 1, margin_left: 2) {
+                        Text(content: text, color: theme::CYAN)
+                    }
+                }
+                .into_any()
+            } else {
+                element! { Text(content: text, color: theme::CYAN) }.into_any()
+            }
+        }
+        MathRender::Matrix {
+            rows,
+            col_widths,
+            kind,
+        } => {
+            let (l_open, l_mid, l_close, r_open, r_mid, r_close) = bracket_glyphs(kind);
+            if props.display {
+                element! {
+                    View(margin_bottom: 1, margin_left: 2) {
+                        MatrixMath(
+                            rows: rows,
+                            col_widths: col_widths,
+                            l_open: l_open,
+                            l_mid: l_mid,
+                            l_close: l_close,
+                            r_open: r_open,
+                            r_mid: r_mid,
+                            r_close: r_close,
+                        )
+                    }
+                }
+                .into_any()
+            } else {
+                element! {
+                    MatrixMath(
+                        rows: rows,
+                        col_widths: col_widths,
+                        l_open: l_open,
+                        l_mid: l_mid,
+                        l_close: l_close,
+                        r_open: r_open,
+                        r_mid: r_mid,
+                        r_close: r_close,
+                    )
+                }
+                .into_any()
+            }
         }
     }
+}
+
+/// Structural matrix renderer. Lays rows out as flex rows so the bracket
+/// glyphs (which are discrete cells) and column-padded cells always align,
+/// instead of relying on space-padding inside a single string.
+#[derive(Default, Props)]
+pub struct MatrixMathProps {
+    pub rows: Vec<Vec<String>>,
+    pub col_widths: Vec<usize>,
+    pub l_open: String,
+    pub l_mid: String,
+    pub l_close: String,
+    pub r_open: String,
+    pub r_mid: String,
+    pub r_close: String,
+}
+
+#[component]
+pub fn MatrixMath(props: &MatrixMathProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let nrows = props.rows.len();
+
+    let mut row_elems: Vec<AnyElement<'static>> = Vec::new();
+    for (ri, row) in props.rows.iter().enumerate() {
+        let left = if ri == 0 {
+            props.l_open.clone()
+        } else if ri == nrows - 1 {
+            props.l_close.clone()
+        } else {
+            props.l_mid.clone()
+        };
+        let right = if ri == 0 {
+            props.r_open.clone()
+        } else if ri == nrows - 1 {
+            props.r_close.clone()
+        } else {
+            props.r_mid.clone()
+        };
+
+        let mut cell_elems: Vec<AnyElement<'static>> = Vec::new();
+        cell_elems.push(element! { Text(content: left, color: theme::CYAN) }.into_any());
+        cell_elems.push(element! { Text(content: " ".to_string(), color: theme::CYAN) }.into_any());
+        for (ci, cell) in row.iter().enumerate() {
+            let w = props.col_widths.get(ci).copied().unwrap_or(0);
+            let pad = w.saturating_sub(unicode_width::UnicodeWidthStr::width(cell.as_str()));
+            let content = format!("{}{}", cell, " ".repeat(pad));
+            cell_elems.push(element! { Text(content: content, color: theme::CYAN) }.into_any());
+        }
+        cell_elems.push(element! { Text(content: " ".to_string(), color: theme::CYAN) }.into_any());
+        cell_elems.push(element! { Text(content: right, color: theme::CYAN) }.into_any());
+
+        row_elems.push(
+            element! {
+                View(flex_direction: FlexDirection::Row) {
+                    #(cell_elems.into_iter())
+                }
+            }
+            .into_any(),
+        );
+    }
+
+    element! {
+        View(flex_direction: FlexDirection::Column) {
+            #(row_elems.into_iter())
+        }
+    }
+    .into_any()
 }
 
 #[derive(Default, Props)]

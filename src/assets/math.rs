@@ -1,10 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::assets::asset_cache::{AssetCache, ImageData};
 use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
+use unicodeit;
 use tylax::latex_to_typst;
 use typst::{
     Library, LibraryExt, compile,
@@ -16,6 +18,732 @@ use typst::{
 };
 
 static MATH_CACHE: std::sync::LazyLock<AssetCache> = std::sync::LazyLock::new(AssetCache::new);
+
+/// How math formulas are rendered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum MathMode {
+    /// Render as Unicode glyphs inline in the terminal (default, no images).
+    #[default]
+    Unicode,
+    /// Render as a rasterized image via the Kitty graphics protocol.
+    Image,
+}
+
+static MATH_MODE: OnceLock<MathMode> = OnceLock::new();
+
+/// Set the global math rendering mode. Called once at startup from the CLI.
+pub fn set_math_mode(mode: MathMode) {
+    let _ = MATH_MODE.set(mode);
+}
+
+/// Current math rendering mode (defaults to `Unicode`).
+pub fn math_mode() -> MathMode {
+    *MATH_MODE.get().unwrap_or(&MathMode::Unicode)
+}
+
+/// Convert a LaTeX expression to a Unicode text representation. Used as the
+/// default (image-free) math renderer. Results are cached per expression.
+/// How a Unicode-rendered math expression should be drawn.
+#[derive(Debug, Clone)]
+pub enum MathRender {
+    /// A plain (possibly multi-line) text representation.
+    Text(String),
+    /// A matrix / cases environment laid out as a grid with bracket glyphs.
+    Matrix {
+        rows: Vec<Vec<String>>,
+        col_widths: Vec<usize>,
+        kind: MatrixKind,
+    },
+}
+
+/// Render LaTeX as a Unicode text string (matrices become box-art text).
+/// Convenience wrapper around [`render_math_unicode_ast`] for callers that
+/// only need a string.
+pub fn render_math_unicode(latex: &str) -> String {
+    match render_math_unicode_ast(latex) {
+        MathRender::Text(s) => s,
+        MathRender::Matrix {
+            rows,
+            col_widths,
+            kind,
+        } => matrix_to_string(&rows, &col_widths, kind),
+    }
+}
+
+/// Render LaTeX as a [`MathRender`], preserving matrices as structured grid
+/// data so the UI can lay them out with aligned borders.
+pub fn render_math_unicode_ast(latex: &str) -> MathRender {
+    if let Ok(cache) = UNICODE_MATH_CACHE.lock() {
+        if let Some(cached) = cache.get(latex) {
+            return cached.clone();
+        }
+    }
+
+    let parts = preprocess_latex(latex);
+    // Convert LaTeX symbol/accents/superscripts that `unicodeit` knows about
+    // (e.g. \alpha -> α, x^2 -> x², \infty -> ∞). Matrix cells are already
+    // converted because they recurse through here via `render_cell`.
+    let parts: Vec<MathPart> = parts
+        .into_iter()
+        .map(|p| match p {
+            MathPart::Text(t) => MathPart::Text(convert_math_text(&t)),
+            other => other,
+        })
+        .collect();
+    // A whole-expression matrix is surfaced structurally; anything mixed
+    // (e.g. text with an inline matrix) is flattened to box-art text.
+    let render = if parts.len() == 1 {
+        match &parts[0] {
+            MathPart::Text(t) => MathRender::Text(t.clone()),
+            MathPart::Matrix {
+                rows,
+                col_widths,
+                kind,
+            } => MathRender::Matrix {
+                rows: rows.clone(),
+                col_widths: col_widths.clone(),
+                kind: *kind,
+            },
+        }
+    } else {
+        MathRender::Text(flatten(parts))
+    };
+
+    if let Ok(mut cache) = UNICODE_MATH_CACHE.lock() {
+        if cache.len() > 256 {
+            *cache = HashMap::new();
+        }
+        cache.insert(latex.to_string(), render.clone());
+    }
+    render
+}
+
+/// The bracket style for a matrix environment.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MatrixKind {
+    /// `bmatrix` — square brackets
+    #[default]
+    Bracket,
+    /// `Bmatrix` — braces
+    Brace,
+    /// `pmatrix` — parentheses
+    Paren,
+    /// `vmatrix` — vertical bars
+    Vbar,
+    /// `matrix` — no brackets
+    None,
+}
+
+/// Internal: a piece of preprocessed output (text or a matrix).
+#[derive(Clone)]
+enum MathPart {
+    Text(String),
+    Matrix {
+        rows: Vec<Vec<String>>,
+        col_widths: Vec<usize>,
+        kind: MatrixKind,
+    },
+}
+
+/// Brace-aware rewrites for constructs `unicodeit` leaves as raw LaTeX.
+/// Handles `\frac`/`\sqrt` (recursively) and matrix environments. Everything
+/// else passes through untouched. Returns a list of parts so matrices can be
+/// laid out structurally by the UI instead of as pre-formatted text.
+fn preprocess_latex(latex: &str) -> Vec<MathPart> {
+    let chars: Vec<char> = latex.chars().collect();
+    preprocess_inner(&chars, 0, chars.len())
+}
+
+/// Recursive worker over the char slice `[start, end)`. Recurses into the
+/// arguments of `\frac`/`\sqrt`/`\begin` so nested constructs are rewritten
+/// before `unicodeit` sees them.
+fn preprocess_inner(chars: &[char], start: usize, end: usize) -> Vec<MathPart> {
+    let mut parts: Vec<MathPart> = Vec::new();
+    let mut text = String::new();
+    let mut i = start;
+    while i < end {
+        // Superscript/subscript operators: consume their argument (a group, a
+        // single token, or a `\command`) and emit it as Unicode super/sub
+        // script characters so the caret never leaks into the output.
+                if chars[i] == '^' || chars[i] == '_' {
+            let sup = chars[i] == '^';
+            if let Some((cs, ce, skip)) = read_token(chars, i + 1) {
+                let arg = flatten(preprocess_inner(chars, cs, ce));
+                let converted = convert_math_text(&arg);
+                let mut mapped = String::new();
+                // Keep the caret when the script contains a letter that has no
+                // Unicode sub/superscript variant, so it isn't misread as a
+                // product (e.g. `ω_β₀`). Drop it when everything converts
+                // (e.g. `xⁿ⁺¹`) or it's a non-letter symbol (e.g. `∫₀∞`).
+                let mut needs_caret = false;
+                for ch in converted.chars() {
+                    let m = map_script(ch, sup);
+                    if ch.is_alphabetic() && m == ch {
+                        needs_caret = true;
+                    }
+                    mapped.push(m);
+                }
+                if needs_caret {
+                    // Use a private-use sentinel so the later `unicodeit` pass
+                    // does not re-merge the caret into a script variant.
+                    text.push(if sup { SUP_MARK } else { SUB_MARK });
+                }
+                text.push_str(&mapped);
+                i = skip;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if chars[i] == '\\' && i + 1 < end {
+            // Line break / row separator: render as a space in inline math.
+            if chars[i + 1] == '\\' {
+                text.push(' ');
+                i += 2;
+                continue;
+            }
+            let cmd_start = i + 1;
+            let mut j = cmd_start;
+            while j < end && chars[j].is_alphabetic() {
+                j += 1;
+            }
+            let cmd: String = chars[cmd_start..j].iter().collect();
+            if matches!(cmd.as_str(), "frac" | "dfrac" | "tfrac") {
+                if let Some((ns, ne)) = read_group(chars, j) {
+                    if let Some((ds, de)) = read_group(chars, ne + 1) {
+                        let num = flatten(preprocess_inner(chars, ns, ne));
+                        let den = flatten(preprocess_inner(chars, ds, de));
+                        flush(&mut text, &mut parts);
+                        parts.push(MathPart::Text(format!("{}/{}", num, den)));
+                        i = de + 1;
+                        continue;
+                    }
+                }
+            } else if cmd == "sqrt" {
+                let mut k = j;
+                let mut root = String::new();
+                if k < end && chars[k] == '[' {
+                    if let Some((rs, re)) = read_bracket(chars, k) {
+                        root = flatten(preprocess_inner(chars, rs, re));
+                        k = re;
+                    }
+                }
+                if let Some((bs, be)) = read_group(chars, k) {
+                    let body = flatten(preprocess_inner(chars, bs, be));
+                    flush(&mut text, &mut parts);
+                    if root.is_empty() {
+                        parts.push(MathPart::Text(format!("√({})", body)));
+                    } else {
+                        parts.push(MathPart::Text(format!("{}(√({}))", root, body)));
+                    }
+                    i = be + 1;
+                    continue;
+                }
+            } else if matches!(
+                cmd.as_str(),
+                "text"
+                    | "textbf"
+                    | "textit"
+                    | "mathrm"
+                    | "mathbf"
+                    | "mathit"
+                    | "mathsf"
+                    | "texttt"
+                    | "textrm"
+                    | "textsf"
+                    | "textmd"
+                    | "mathnormal"
+                    | "operatorname"
+            ) {
+                // Drop the command name and render just its (math) argument.
+                if chars.get(j) == Some(&'{') {
+                    if let Some((gs, ge)) = read_group(chars, j) {
+                        let inner = flatten(preprocess_inner(chars, gs, ge));
+                        text.push_str(&convert_math_text(&inner));
+                        i = ge + 1;
+                        continue;
+                    }
+                }
+                i = j;
+                continue;
+            } else if matches!(
+                cmd.as_str(),
+                "lim"
+                    | "limsup"
+                    | "liminf"
+                    | "max"
+                    | "min"
+                    | "deg"
+                    | "sup"
+                    | "inf"
+                    | "gcd"
+                    | "det"
+                    | "ker"
+                    | "dim"
+                    | "Pr"
+                    | "arg"
+                    | "hom"
+                    | "id"
+                    | "bmod"
+            ) {
+                // Operator names: emit the word (roman in real TeX).
+                text.push_str(&cmd);
+                i = j;
+                continue;
+            } else if cmd == "xrightarrow" || cmd == "xleftarrow" {
+                text.push(if cmd == "xrightarrow" { '→' } else { '←' });
+                if chars.get(j) == Some(&'{') {
+                    if let Some((gs, ge)) = read_group(chars, j) {
+                        let inner = flatten(preprocess_inner(chars, gs, ge));
+                        let converted = convert_math_text(&inner);
+                        for ch in converted.chars() {
+                            text.push(map_script(ch, true));
+                        }
+                        i = ge + 1;
+                        continue;
+                    }
+                }
+                i = j;
+                continue;
+            } else if cmd == "begin" {
+                if let Some((es, ee)) = read_group(chars, j) {
+                    let env: String = chars[es..ee].iter().collect();
+                    if let Some(kind) = classify_matrix(&env) {
+                        if let Some((bs, be)) = read_env_body(chars, ee + 1, &env) {
+                            let needle: String = format!("\\end{{{}}}", env);
+                            let body_end = be - needle.chars().count();
+                            flush(&mut text, &mut parts);
+                            parts.push(build_matrix(chars, bs, body_end, kind));
+                            i = be;
+                            continue;
+                        }
+                    }
+                }
+            }
+            flush(&mut text, &mut parts);
+            if cmd.is_empty() {
+                // Escaped literal (e.g. `\&`, `\#`, `\$`, `\_`, `\{`, `\}`, `\ `).
+                // Emit the literal character instead of leaking the backslash.
+                if let Some(c) = chars.get(cmd_start) {
+                    match c {
+                        '&' | '#' | '%' | '$' | '_' | '{' | '}' | ' ' => {
+                            text.push(*c);
+                            i = cmd_start + 1;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            text.push('\\');
+            text.push_str(&cmd);
+            i = j;
+            continue;
+        }
+        text.push(chars[i]);
+        i += 1;
+    }
+    flush(&mut text, &mut parts);
+    parts
+}
+
+/// Flushes the accumulated text buffer into a `Text` part (if non-empty).
+fn flush(text: &mut String, parts: &mut Vec<MathPart>) {
+    if !text.is_empty() {
+        let t = std::mem::take(text);
+        parts.push(MathPart::Text(t));
+    }
+}
+
+/// Collapses a part list into a single string (matrices become box-art text).
+/// Used for inline contexts and the cached string API.
+fn flatten(parts: Vec<MathPart>) -> String {
+    parts
+        .into_iter()
+        .map(|p| match p {
+            MathPart::Text(t) => t,
+            MathPart::Matrix {
+                rows,
+                col_widths,
+                kind,
+            } => matrix_to_string(&rows, &col_widths, kind),
+        })
+        .collect()
+}
+
+/// Converts a raw LaTeX text fragment to Unicode: `unicodeit` handles most
+/// symbols/accents/simple scripts, then we fix any remaining `^`/`_` markers
+/// that `unicodeit` leaves behind (e.g. `^\infty` -> `∞`, `^{n+1}` -> `ⁿ⁺¹`).
+/// Private-use sentinels marking a sub/superscript whose caret was kept to
+/// disambiguate from multiplication (e.g. `ω_β₀`). They survive the
+/// `unicodeit` pass (which would otherwise re-merge the caret into a script
+/// variant) and are restored to literal `_`/`^` at the very end.
+const SUB_MARK: char = '\u{E000}';
+const SUP_MARK: char = '\u{E001}';
+
+fn convert_math_text(t: &str) -> String {
+    let s = apply_scripts(&unicodeit::replace(t));
+    // Restore forced-caret sentinels to real carets for the final text.
+    s.replace(SUP_MARK, "^").replace(SUB_MARK, "_")
+}
+
+/// `unicodeit` only superscripts content that maps to a precomposed character
+/// (e.g. `^2` -> `²`), leaving a literal `^` when it can't (e.g. `^\infty`).
+/// This walks the string and converts trailing `^`/`_` runs into Unicode
+/// superscripts/subscripts, dropping the caret when no variant exists.
+fn apply_scripts(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if (c == '^' || c == '_') && i + 1 < chars.len() {
+            let sup = c == '^';
+            let (content, next) = if chars[i + 1] == '{' {
+                let mut depth = 0i64;
+                let mut k = i + 1;
+                while k < chars.len() {
+                    match chars[k] {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                (chars[i + 2..k].iter().collect::<String>(), k + 1)
+            } else {
+                (chars[i + 1..=i + 1].iter().collect::<String>(), i + 2)
+            };
+            for ch in content.chars() {
+                out.push(map_script(ch, sup));
+            }
+            i = next;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+/// Map a character to its superscript (`sup == true`) or subscript variant.
+/// When no variant exists the character is kept as-is (the caret is dropped).
+fn map_script(ch: char, sup: bool) -> char {
+    if sup {
+        match ch {
+            '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴',
+            '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
+            'a' => 'ᵃ', 'b' => 'ᵇ', 'c' => 'ᶜ', 'd' => 'ᵈ', 'e' => 'ᵉ',
+            'f' => 'ᶠ', 'g' => 'ᵍ', 'h' => 'ʰ', 'i' => 'ⁱ', 'j' => 'ʲ',
+            'k' => 'ᵏ', 'l' => 'ˡ', 'm' => 'ᵐ', 'n' => 'ⁿ', 'o' => 'ᵒ',
+            'p' => 'ᵖ', 'r' => 'ʳ', 's' => 'ˢ', 't' => 'ᵗ', 'u' => 'ᵘ',
+            'v' => 'ᵛ', 'w' => 'ʷ', 'x' => 'ˣ', 'y' => 'ʸ', 'z' => 'ᶻ',
+            'A' => 'ᴬ', 'B' => 'ᴮ', 'D' => 'ᴰ', 'E' => 'ᴱ', 'G' => 'ᴳ',
+            'H' => 'ᴴ', 'I' => 'ᴵ', 'J' => 'ᴶ', 'K' => 'ᴷ', 'L' => 'ᴸ',
+            'M' => 'ᴹ', 'N' => 'ᴺ', 'O' => 'ᴼ', 'P' => 'ᴾ', 'R' => 'ᴿ',
+            'T' => 'ᵀ', 'U' => 'ᵁ', 'V' => 'ⱽ', 'W' => 'ᵂ',
+            '+' => '⁺', '-' => '⁻', '\u{2212}' => '⁻', '=' => '⁼', '(' => '⁽', ')' => '⁾',
+            '<' => '˂', '>' => '˃',
+            _ => ch,
+        }
+    } else {
+        match ch {
+            '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄',
+            '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
+            'a' => 'ₐ', 'e' => 'ₑ', 'o' => 'ₒ', 'x' => 'ₓ', 'h' => 'ₕ',
+            'k' => 'ₖ', 'l' => 'ₗ', 'm' => 'ₘ', 'n' => 'ₙ', 'p' => 'ₚ',
+            's' => 'ₛ', 't' => 'ₜ',
+            '+' => '₊', '-' => '₋', '\u{2212}' => '₋', '=' => '₌', '(' => '₍', ')' => '₎',
+            _ => ch,
+        }
+    }
+}
+
+/// Reads the argument of a `^`/`_` operator starting at `idx`: a `{...}` group,
+/// a `\command`, or a single character. Returns `(content_start, content_end,
+/// skip_to)` where `[content_start, content_end)` is the argument text (without
+/// surrounding braces) and `skip_to` is the index to resume scanning after.
+fn read_token(chars: &[char], idx: usize) -> Option<(usize, usize, usize)> {
+    if chars.get(idx) == Some(&'{') {
+        if let Some((s, e)) = read_group(chars, idx) {
+            // s points just inside `{`, e is the closing `}` index.
+            return Some((s, e, e + 1));
+        }
+        return None;
+    }
+    if chars.get(idx) == Some(&'\\') {
+        let mut j = idx + 1;
+        while j < chars.len() && (chars[j].is_alphabetic() || chars[j] == '_') {
+            j += 1;
+        }
+        return Some((idx, j, j));
+    }
+    if idx < chars.len() {
+        return Some((idx, idx + 1, idx + 1));
+    }
+    None
+}
+
+/// Reads a `{...}` group starting at `idx` (must point at `{`).
+/// Returns the (inner_start, inner_end) range of the content between braces,
+/// properly handling nested braces.
+fn read_group(chars: &[char], idx: usize) -> Option<(usize, usize)> {
+    if chars.get(idx) != Some(&'{') {
+        return None;
+    }
+    let mut depth: i64 = 1;
+    let mut i = idx + 1;
+    let inner_start = i;
+    while i < chars.len() {
+        match chars[i] {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((inner_start, i));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Reads a `[...]` group starting at `idx` (must point at `[`).
+/// Returns the (inner_start, inner_end) range of the content.
+fn read_bracket(chars: &[char], idx: usize) -> Option<(usize, usize)> {
+    if chars.get(idx) != Some(&'[') {
+        return None;
+    }
+    let mut i = idx + 1;
+    let inner_start = i;
+    while i < chars.len() {
+        if chars[i] == ']' {
+            return Some((inner_start, i + 1));
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Returns the body range between `\begin{name}` (whose group ends at
+/// `env_end`) and the matching `\end{name}`. The returned end is just past
+/// the `\end{name}` command so the caller can skip it.
+fn read_env_body(chars: &[char], env_end: usize, name: &str) -> Option<(usize, usize)> {
+    let s: String = chars[env_end..].iter().collect();
+    let needle = format!("\\end{{{}}}", name);
+    if let Some(pos) = s.find(&needle) {
+        Some((env_end, env_end + pos + needle.chars().count()))
+    } else {
+        None
+    }
+}
+
+fn classify_matrix(env: &str) -> Option<MatrixKind> {
+    match env {
+        "bmatrix" => Some(MatrixKind::Bracket),
+        "Bmatrix" => Some(MatrixKind::Brace),
+        "pmatrix" => Some(MatrixKind::Paren),
+        "vmatrix" => Some(MatrixKind::Vbar),
+        "matrix" => Some(MatrixKind::None),
+        _ => None,
+    }
+}
+
+/// Parses a matrix/cases body into `MathPart::Matrix`, splitting rows on `\\`
+/// and cells on `&` at depth 0 (respecting nested braces and environments),
+/// then aligning columns by display width.
+fn build_matrix(chars: &[char], start: usize, end: usize, kind: MatrixKind) -> MathPart {
+    let mut rows: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut cur: Vec<(usize, usize)> = Vec::new();
+    let mut cell_start = start;
+    let mut brace = 0i64;
+    let mut env = 0i64;
+    let mut i = start;
+    while i < end {
+        // Row separator: \\ (only at depth 0)
+        if chars[i] == '\\' && i + 1 < end && chars[i + 1] == '\\' && brace == 0 && env == 0 {
+            cur.push((cell_start, i));
+            rows.push(std::mem::take(&mut cur));
+            cell_start = i + 2;
+            i += 2;
+            continue;
+        }
+        // \begin{...} / \end{...} adjust environment depth and are skipped
+        if chars[i] == '\\' && i + 5 < end {
+            let w: String = chars[i + 1..i + 6].iter().collect();
+            if w == "begin" || w == "end" {
+                let mut k = i + 6;
+                while k < end && chars[k] != '{' {
+                    k += 1;
+                }
+                let mut d = 0i64;
+                while k < end {
+                    match chars[k] {
+                        '{' => d += 1,
+                        '}' => {
+                            d -= 1;
+                            if d == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                if w == "begin" {
+                    env += 1;
+                } else {
+                    env -= 1;
+                }
+                i = k + 1;
+                continue;
+            }
+        }
+        match chars[i] {
+            '{' => brace += 1,
+            '}' => brace = brace.saturating_sub(1),
+            '&' if brace == 0 && env == 0 => {
+                cur.push((cell_start, i));
+                cell_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    cur.push((cell_start, i));
+    rows.push(cur);
+    // Drop fully-empty trailing rows (e.g. a dangling row separator)
+    rows.retain(|r| !(r.len() == 1 && r[0].0 >= r[0].1));
+
+    if rows.is_empty() {
+        return MathPart::Text(String::new());
+    }
+
+    let mut grid: Vec<Vec<String>> = Vec::new();
+    let mut colw: Vec<usize> = Vec::new();
+    for row in &rows {
+        let mut grow = Vec::new();
+        for (ci, &(cs, ce)) in row.iter().enumerate() {
+            let cell = convert_math_text(&flatten(preprocess_inner(chars, cs, ce)).trim()).to_string();
+            let w = unicode_width::UnicodeWidthStr::width(cell.as_str());
+            if ci >= colw.len() {
+                colw.push(0);
+            }
+            colw[ci] = colw[ci].max(w);
+            grow.push(cell);
+        }
+        grid.push(grow);
+    }
+
+    MathPart::Matrix {
+        rows: grid,
+        col_widths: colw,
+        kind,
+    }
+}
+
+/// Renders a parsed matrix as a multiline box-art string (used for inline
+/// contexts and the string API). The structured `MathRender::Matrix` variant
+/// is preferred by the UI for pixel-aligned borders.
+fn matrix_to_string(rows: &[Vec<String>], col_widths: &[usize], kind: MatrixKind) -> String {
+    let nrows = rows.len();
+    let (l_open, l_mid, l_close, r_open, r_mid, r_close) = bracket_glyphs(kind);
+
+    let mut res = String::new();
+    for (ri, row) in rows.iter().enumerate() {
+        let left = if ri == 0 {
+            l_open.clone()
+        } else if ri == nrows - 1 {
+            l_close.clone()
+        } else {
+            l_mid.clone()
+        };
+        let right = if ri == 0 {
+            r_open.clone()
+        } else if ri == nrows - 1 {
+            r_close.clone()
+        } else {
+            r_mid.clone()
+        };
+        res.push_str(&left);
+        res.push(' ');
+        for ci in 0..col_widths.len() {
+            let cell = row.get(ci).map(|s| s.as_str()).unwrap_or("");
+            let w = col_widths[ci];
+            let pad = w.saturating_sub(unicode_width::UnicodeWidthStr::width(cell));
+            res.push_str(cell);
+            for _ in 0..pad {
+                res.push(' ');
+            }
+            if ci + 1 < col_widths.len() {
+                res.push(' ');
+            }
+        }
+        res.push(' ');
+        res.push_str(&right);
+        if ri + 1 < nrows {
+            res.push('\n');
+        }
+    }
+    res
+}
+
+/// Returns the (open, middle, close) bracket glyphs for each side, mirroring
+/// LaTeX's matrix environment brackets.
+pub(crate) fn bracket_glyphs(kind: MatrixKind) -> (String, String, String, String, String, String) {
+    match kind {
+        MatrixKind::Bracket => (
+            "⎡".into(),
+            "⎢".into(),
+            "⎣".into(),
+            "⎤".into(),
+            "⎥".into(),
+            "⎦".into(),
+        ),
+        MatrixKind::Paren => (
+            "⎛".into(),
+            "⎜".into(),
+            "⎝".into(),
+            "⎞".into(),
+            "⎟".into(),
+            "⎠".into(),
+        ),
+        MatrixKind::Brace => (
+            "⎧".into(),
+            "⎨".into(),
+            "⎩".into(),
+            "⎫".into(),
+            "⎬".into(),
+            "⎭".into(),
+        ),
+        MatrixKind::Vbar => (
+            "|".into(),
+            "|".into(),
+            "|".into(),
+            "|".into(),
+            "|".into(),
+            "|".into(),
+        ),
+        MatrixKind::None => (
+            "".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+            "".into(),
+        ),
+    }
+}
+
+static UNICODE_MATH_CACHE: LazyLock<Mutex<HashMap<String, MathRender>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn render_math(
     latex: &str,
@@ -243,5 +971,90 @@ mod tests {
 
         assert_png(&png, width, height);
         assert!(width <= 40);
+    }
+
+    #[test]
+    fn unicode_math_converts_common_symbols() {
+        assert_eq!(render_math_unicode(r"\alpha"), "α");
+        assert_eq!(render_math_unicode(r"x^2"), "x²");
+        assert_eq!(render_math_unicode(r"\infty"), "∞");
+        assert!(render_math_unicode(r"\frac{1}{2}").contains('/'));
+    }
+
+    #[test]
+    fn unicode_fraction_is_recursive_and_balanced() {
+        // \sqrt inside \frac must be recursed and braces balanced
+        let out = render_math_unicode(r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}");
+        assert!(out.ends_with("/2a"), "got: {out:?}");
+        assert!(out.contains('√'), "got: {out:?}");
+        assert!(!out.contains("\\frac"), "frac not rewritten: {out:?}");
+        assert!(!out.contains('}'), "stray brace in output: {out:?}");
+    }
+
+    #[test]
+    fn unicode_matrix_renders_as_box_art() {
+        let out = render_math_unicode(
+            r"\begin{bmatrix} 1 & 0 & 0 \\ 0 & 34 & 0 \\ 0 & 0 & x^2 \end{bmatrix}",
+        );
+        assert!(out.contains('⎡'), "expected top bracket, got: {out:?}");
+        assert!(out.contains('⎦'), "expected bottom bracket, got: {out:?}");
+        // three rows, each on its own line
+        let lines: Vec<&str> = out.split('\n').collect();
+        assert_eq!(lines.len(), 3, "expected 3 rows, got: {out:?}");
+        assert!(out.contains("x²"));
+    }
+
+    #[test]
+    fn unicode_pmatrix_uses_parens() {
+        let out = render_math_unicode(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}");
+        assert!(out.contains('⎛'));
+        assert!(out.contains('⎠'));
+    }
+
+    #[test]
+    fn unicode_integral_drops_extra_caret() {
+        let out = render_math_unicode(r"\int_0^\infty e^{-x} \, dx = 1");
+        assert!(!out.contains('^'), "stray caret in: {out:?}");
+        assert!(out.contains("∫₀∞"), "got: {out:?}");
+        assert!(out.contains("e⁻ˣ"), "got: {out:?}");
+    }
+
+    #[test]
+    fn unicode_script_groups_convert() {
+        assert_eq!(render_math_unicode(r"x^{n+1}"), "xⁿ⁺¹");
+        assert_eq!(render_math_unicode(r"a_n"), "aₙ");
+        // A letter with no sub/superscript variant keeps a caret so it is not
+        // misread as a product.
+        assert_eq!(render_math_unicode(r"\omega_{\beta_0}"), "ω_β₀");
+    }
+
+    #[test]
+    fn chapter1_equations_render_without_artifacts() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/02-chapter-1.md");
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return, // file not present in this checkout
+        };
+        let parts: Vec<&str> = content.split('$').collect();
+        let mut count = 0;
+        let mut bad: Vec<(String, String)> = Vec::new();
+        for (i, p) in parts.iter().enumerate() {
+            if i % 2 == 1 {
+                let eq = p.trim();
+                if eq.is_empty() {
+                    continue;
+                }
+                count += 1;
+                let out = render_math_unicode(eq);
+                if out.contains('\\') {
+                    bad.push((eq.to_string(), out));
+                }
+            }
+        }
+        eprintln!("checked {count} inline equations, {} with artifacts", bad.len());
+        for (eq, out) in &bad {
+            eprintln!("RAW: {eq}\nOUT: {out}\n---");
+        }
+        assert!(bad.is_empty(), "{} equations left raw LaTeX artifacts", bad.len());
     }
 }
