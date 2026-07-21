@@ -59,8 +59,19 @@ pub struct UnicodeMathProps {
 }
 
 #[component]
-pub fn UnicodeMath(props: &UnicodeMathProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
-    let render = render_math_unicode_ast(&props.content);
+pub fn UnicodeMath(props: &UnicodeMathProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let mut cached = hooks.use_ref(|| (String::new(), MathRender::Text(String::new())));
+    let render = {
+        let guard = cached.read();
+        if guard.0 == props.content {
+            guard.1.clone()
+        } else {
+            drop(guard);
+            let r = render_math_unicode_ast(&props.content);
+            cached.set((props.content.clone(), r.clone()));
+            r
+        }
+    };
     match render {
         MathRender::Text(text) => {
             if props.display {

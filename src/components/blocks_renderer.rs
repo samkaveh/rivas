@@ -299,16 +299,28 @@ pub fn BlocksRenderer(
         (d.0.clone(), d.1.clone())
     };
 
-    // NOTE: Virtualization is intentionally disabled. Skipping off-screen blocks
-    // and replacing them with estimated-height spacers made `ScrollView`'s
-    // *measured* `content_height` diverge from the true document height (real
-    // graphic heights only count for rendered blocks, estimate fallback for the
-    // rest), which broke `G`/`End` bottom-pinning and `j`/`k` view-following.
-    // Rendering all blocks keeps `content_height` authoritative, so the native
-    // `scroll_to_bottom()` and auto-scroll are correct. The document is small
-    // enough that rendering every block is cheap.
-    let first_visible = 0usize;
-    let last_visible = block_counts;
+    // Virtualization: only render blocks whose estimated height range overlaps
+    // [scroll_offset, scroll_offset + viewport_h + buffer]. Skipped blocks are
+    // replaced with estimated-height spacers so `ScrollView`'s measured
+    // `content_height` stays close to the true total. For Unicode text the
+    // estimates are accurate; for Kitty graphics (async image loads) there may
+    // be slight drift, but the auto-scroll / bottom-pinning still work well
+    // enough in practice.
+    // For small/medium documents the overhead of spacers and content_height
+    // drift is not worth it, so virtualization is only enabled above the
+    // threshold.
+    const VIRTUALIZE_THRESHOLD: usize = 500;
+    let (first_visible, last_visible) = if block_counts > VIRTUALIZE_THRESHOLD {
+        let fv = heights
+            .partition_point(|&h| h <= scroll_offset)
+            .saturating_sub(1);
+        let lv = heights
+            .partition_point(|&h| h <= scroll_offset + viewport_h as u32 + buffer)
+            .min(block_counts);
+        (fv, lv)
+    } else {
+        (0usize, block_counts)
+    };
 
     // Binary search for cursor block using cached start offsets
     let cursor_block_idx = cursor_offset
