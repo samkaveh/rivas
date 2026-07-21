@@ -1,12 +1,11 @@
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::assets::asset_cache::{AssetCache, ImageData};
 use crate::assets::svg::rasterize_svg_to_png;
 use anyhow::Result;
-use unicodeit;
 use tylax::latex_to_typst;
 use typst::{
     Library, LibraryExt, compile,
@@ -16,6 +15,7 @@ use typst::{
     text::{Font, FontBook},
     utils::LazyHash,
 };
+use unicodeit;
 
 static MATH_CACHE: std::sync::LazyLock<AssetCache> = std::sync::LazyLock::new(AssetCache::new);
 
@@ -74,7 +74,7 @@ pub fn render_math_unicode(latex: &str) -> String {
 /// data so the UI can lay them out with aligned borders.
 pub fn render_math_unicode_ast(latex: &str) -> MathRender {
     if let Ok(cache) = UNICODE_MATH_CACHE.lock() {
-        if let Some(cached) = cache.get(latex) {
+        if let Some(cached) = cache.map.get(latex) {
             return cached.clone();
         }
     }
@@ -110,10 +110,15 @@ pub fn render_math_unicode_ast(latex: &str) -> MathRender {
     };
 
     if let Ok(mut cache) = UNICODE_MATH_CACHE.lock() {
-        if cache.len() > 256 {
-            *cache = HashMap::new();
+        cache.map.insert(latex.to_string(), render.clone());
+        cache.order.push_back(latex.to_string());
+        while cache.order.len() > UNICODE_MATH_CACHE_CAP {
+            if let Some(oldest) = cache.order.pop_front() {
+                cache.map.remove(&oldest);
+            } else {
+                break;
+            }
         }
-        cache.insert(latex.to_string(), render.clone());
     }
     render
 }
@@ -165,7 +170,7 @@ fn preprocess_inner(chars: &[char], start: usize, end: usize) -> Vec<MathPart> {
         // Superscript/subscript operators: consume their argument (a group, a
         // single token, or a `\command`) and emit it as Unicode super/sub
         // script characters so the caret never leaks into the output.
-                if chars[i] == '^' || chars[i] == '_' {
+        if chars[i] == '^' || chars[i] == '_' {
             let sup = chars[i] == '^';
             if let Some((cs, ce, skip)) = read_token(chars, i + 1) {
                 let arg = flatten(preprocess_inner(chars, cs, ce));
@@ -436,29 +441,100 @@ fn apply_scripts(input: &str) -> String {
 fn map_script(ch: char, sup: bool) -> char {
     if sup {
         match ch {
-            '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴',
-            '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
-            'a' => 'ᵃ', 'b' => 'ᵇ', 'c' => 'ᶜ', 'd' => 'ᵈ', 'e' => 'ᵉ',
-            'f' => 'ᶠ', 'g' => 'ᵍ', 'h' => 'ʰ', 'i' => 'ⁱ', 'j' => 'ʲ',
-            'k' => 'ᵏ', 'l' => 'ˡ', 'm' => 'ᵐ', 'n' => 'ⁿ', 'o' => 'ᵒ',
-            'p' => 'ᵖ', 'r' => 'ʳ', 's' => 'ˢ', 't' => 'ᵗ', 'u' => 'ᵘ',
-            'v' => 'ᵛ', 'w' => 'ʷ', 'x' => 'ˣ', 'y' => 'ʸ', 'z' => 'ᶻ',
-            'A' => 'ᴬ', 'B' => 'ᴮ', 'D' => 'ᴰ', 'E' => 'ᴱ', 'G' => 'ᴳ',
-            'H' => 'ᴴ', 'I' => 'ᴵ', 'J' => 'ᴶ', 'K' => 'ᴷ', 'L' => 'ᴸ',
-            'M' => 'ᴹ', 'N' => 'ᴺ', 'O' => 'ᴼ', 'P' => 'ᴾ', 'R' => 'ᴿ',
-            'T' => 'ᵀ', 'U' => 'ᵁ', 'V' => 'ⱽ', 'W' => 'ᵂ',
-            '+' => '⁺', '-' => '⁻', '\u{2212}' => '⁻', '=' => '⁼', '(' => '⁽', ')' => '⁾',
-            '<' => '˂', '>' => '˃',
+            '0' => '⁰',
+            '1' => '¹',
+            '2' => '²',
+            '3' => '³',
+            '4' => '⁴',
+            '5' => '⁵',
+            '6' => '⁶',
+            '7' => '⁷',
+            '8' => '⁸',
+            '9' => '⁹',
+            'a' => 'ᵃ',
+            'b' => 'ᵇ',
+            'c' => 'ᶜ',
+            'd' => 'ᵈ',
+            'e' => 'ᵉ',
+            'f' => 'ᶠ',
+            'g' => 'ᵍ',
+            'h' => 'ʰ',
+            'i' => 'ⁱ',
+            'j' => 'ʲ',
+            'k' => 'ᵏ',
+            'l' => 'ˡ',
+            'm' => 'ᵐ',
+            'n' => 'ⁿ',
+            'o' => 'ᵒ',
+            'p' => 'ᵖ',
+            'r' => 'ʳ',
+            's' => 'ˢ',
+            't' => 'ᵗ',
+            'u' => 'ᵘ',
+            'v' => 'ᵛ',
+            'w' => 'ʷ',
+            'x' => 'ˣ',
+            'y' => 'ʸ',
+            'z' => 'ᶻ',
+            'A' => 'ᴬ',
+            'B' => 'ᴮ',
+            'D' => 'ᴰ',
+            'E' => 'ᴱ',
+            'G' => 'ᴳ',
+            'H' => 'ᴴ',
+            'I' => 'ᴵ',
+            'J' => 'ᴶ',
+            'K' => 'ᴷ',
+            'L' => 'ᴸ',
+            'M' => 'ᴹ',
+            'N' => 'ᴺ',
+            'O' => 'ᴼ',
+            'P' => 'ᴾ',
+            'R' => 'ᴿ',
+            'T' => 'ᵀ',
+            'U' => 'ᵁ',
+            'V' => 'ⱽ',
+            'W' => 'ᵂ',
+            '+' => '⁺',
+            '-' => '⁻',
+            '\u{2212}' => '⁻',
+            '=' => '⁼',
+            '(' => '⁽',
+            ')' => '⁾',
+            '<' => '˂',
+            '>' => '˃',
             _ => ch,
         }
     } else {
         match ch {
-            '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄',
-            '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
-            'a' => 'ₐ', 'e' => 'ₑ', 'o' => 'ₒ', 'x' => 'ₓ', 'h' => 'ₕ',
-            'k' => 'ₖ', 'l' => 'ₗ', 'm' => 'ₘ', 'n' => 'ₙ', 'p' => 'ₚ',
-            's' => 'ₛ', 't' => 'ₜ',
-            '+' => '₊', '-' => '₋', '\u{2212}' => '₋', '=' => '₌', '(' => '₍', ')' => '₎',
+            '0' => '₀',
+            '1' => '₁',
+            '2' => '₂',
+            '3' => '₃',
+            '4' => '₄',
+            '5' => '₅',
+            '6' => '₆',
+            '7' => '₇',
+            '8' => '₈',
+            '9' => '₉',
+            'a' => 'ₐ',
+            'e' => 'ₑ',
+            'o' => 'ₒ',
+            'x' => 'ₓ',
+            'h' => 'ₕ',
+            'k' => 'ₖ',
+            'l' => 'ₗ',
+            'm' => 'ₘ',
+            'n' => 'ₙ',
+            'p' => 'ₚ',
+            's' => 'ₛ',
+            't' => 'ₜ',
+            '+' => '₊',
+            '-' => '₋',
+            '\u{2212}' => '₋',
+            '=' => '₌',
+            '(' => '₍',
+            ')' => '₎',
             _ => ch,
         }
     }
@@ -631,7 +707,8 @@ fn build_matrix(chars: &[char], start: usize, end: usize, kind: MatrixKind) -> M
     for row in &rows {
         let mut grow = Vec::new();
         for (ci, &(cs, ce)) in row.iter().enumerate() {
-            let cell = convert_math_text(&flatten(preprocess_inner(chars, cs, ce)).trim()).to_string();
+            let cell =
+                convert_math_text(&flatten(preprocess_inner(chars, cs, ce)).trim()).to_string();
             let w = unicode_width::UnicodeWidthStr::width(cell.as_str());
             if ci >= colw.len() {
                 colw.push(0);
@@ -742,8 +819,24 @@ pub(crate) fn bracket_glyphs(kind: MatrixKind) -> (String, String, String, Strin
     }
 }
 
-static UNICODE_MATH_CACHE: LazyLock<Mutex<HashMap<String, MathRender>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Maximum number of Unicode-rendered math expressions to keep cached. High
+/// enough to hold every distinct expression in a large document.
+/// — scrolling, typing, re-layout — hit the cache instead of re-converting.
+const UNICODE_MATH_CACHE_CAP: usize = 8192;
+
+/// Bounded FIFO cache for Unicode math conversions. Evicts the oldest entry
+/// one at a time when over capacity; it never wipes the whole cache.
+struct UnicodeMathCache {
+    map: HashMap<String, MathRender>,
+    order: VecDeque<String>,
+}
+
+static UNICODE_MATH_CACHE: LazyLock<Mutex<UnicodeMathCache>> = LazyLock::new(|| {
+    Mutex::new(UnicodeMathCache {
+        map: HashMap::new(),
+        order: VecDeque::new(),
+    })
+});
 
 pub fn render_math(
     latex: &str,
@@ -1051,10 +1144,17 @@ mod tests {
                 }
             }
         }
-        eprintln!("checked {count} inline equations, {} with artifacts", bad.len());
+        eprintln!(
+            "checked {count} inline equations, {} with artifacts",
+            bad.len()
+        );
         for (eq, out) in &bad {
             eprintln!("RAW: {eq}\nOUT: {out}\n---");
         }
-        assert!(bad.is_empty(), "{} equations left raw LaTeX artifacts", bad.len());
+        assert!(
+            bad.is_empty(),
+            "{} equations left raw LaTeX artifacts",
+            bad.len()
+        );
     }
 }
