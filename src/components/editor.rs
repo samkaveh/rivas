@@ -864,10 +864,13 @@ impl EditorState {
             }
             "math" => {
                 let new = math::toggle_math_mode();
-                self.message = format!("Math mode: {}", match new {
-                    MathMode::Unicode => "unicode",
-                    MathMode::Image => "image",
-                });
+                self.message = format!(
+                    "Math mode: {}",
+                    match new {
+                        MathMode::Unicode => "unicode",
+                        MathMode::Image => "image",
+                    }
+                );
                 self.needs_rerender = true;
                 false
             }

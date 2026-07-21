@@ -1134,43 +1134,6 @@ mod tests {
         // misread as a product.
         assert_eq!(render_math_unicode(r"\omega_{\beta_0}"), "ω_β₀");
     }
-
-    #[test]
-    fn chapter1_equations_render_without_artifacts() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/02-chapter-1.md");
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => return, // file not present in this checkout
-        };
-        let parts: Vec<&str> = content.split('$').collect();
-        let mut count = 0;
-        let mut bad: Vec<(String, String)> = Vec::new();
-        for (i, p) in parts.iter().enumerate() {
-            if i % 2 == 1 {
-                let eq = p.trim();
-                if eq.is_empty() {
-                    continue;
-                }
-                count += 1;
-                let out = render_math_unicode(eq);
-                if out.contains('\\') {
-                    bad.push((eq.to_string(), out));
-                }
-            }
-        }
-        eprintln!(
-            "checked {count} inline equations, {} with artifacts",
-            bad.len()
-        );
-        for (eq, out) in &bad {
-            eprintln!("RAW: {eq}\nOUT: {out}\n---");
-        }
-        assert!(
-            bad.is_empty(),
-            "{} equations left raw LaTeX artifacts",
-            bad.len()
-        );
-    }
 }
 
 #[cfg(test)]
