@@ -1,3 +1,4 @@
+use crate::assets::math::{self, MathMode};
 use crate::theme;
 use arboard::Clipboard;
 use iocraft::prelude::*;
@@ -441,6 +442,7 @@ pub struct EditorState {
     pub view_height: usize,
     pub view_width: usize,
     pub clipboard: Option<Clipboard>,
+    pub needs_rerender: bool,
 }
 
 impl EditorState {
@@ -468,6 +470,7 @@ impl EditorState {
             view_height: 20,
             view_width: 80,
             clipboard: Clipboard::new().ok(),
+            needs_rerender: false,
         }
     }
 
@@ -858,6 +861,30 @@ impl EditorState {
             "wq!" => {
                 let _ = std::fs::write(&self.filename, self.buf.to_text());
                 true
+            }
+            "math" => {
+                let new = math::toggle_math_mode();
+                self.message = format!(
+                    "Math mode: {}",
+                    match new {
+                        MathMode::Unicode => "unicode",
+                        MathMode::Image => "image",
+                    }
+                );
+                self.needs_rerender = true;
+                false
+            }
+            "math unicode" => {
+                math::set_math_mode(MathMode::Unicode);
+                self.message = "Math mode: unicode".into();
+                self.needs_rerender = true;
+                false
+            }
+            "math image" => {
+                math::set_math_mode(MathMode::Image);
+                self.message = "Math mode: image".into();
+                self.needs_rerender = true;
+                false
             }
             other => {
                 self.message = format!("E: Not an editor command: {}", other);

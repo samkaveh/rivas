@@ -37,9 +37,6 @@ struct Cli {
     /// Theme: dark, light
     #[arg(short, long, default_value = "dark")]
     theme: String,
-    /// Open a side-by-side markdown editor and live preview.
-    #[arg(short, long)]
-    edit: bool,
     /// Enable debug mode: JSONL log to rivas-debug.jsonl + visual overlay annotations
     #[arg(long)]
     debug: bool,
@@ -49,6 +46,15 @@ struct Cli {
     /// Show debug layout annotations (visual overlay boxes). Can combine with --debug or --debug-json-only
     #[arg(long)]
     debug_annotations: bool,
+    /// Math rendering mode. `unicode` (default) shows formulas as Unicode
+    /// glyphs that work in any terminal. `image` rasterizes them via the Kitty
+    /// graphics protocol for pixel-perfect layout (needs Kitty/WezTerm/Ghostty).
+    #[arg(long, value_enum, default_value_t = crate::assets::math::MathMode::Image)]
+    math: crate::assets::math::MathMode,
+    /// Force Kitty graphics protocol even if the terminal is not recognized.
+    /// Use this if your terminal supports Kitty but is not auto-detected.
+    #[arg(long)]
+    force_kitty: bool,
 }
 
 /// Whether debug JSON logging is enabled (from --debug or --debug-json-only)
@@ -65,6 +71,7 @@ fn main() -> Result<()> {
     env_logger::init();
     let cli = Cli::parse();
     debug::init(debug_json_enabled(&cli), debug_annotations_enabled(&cli));
+    crate::assets::math::set_math_mode(cli.math);
 
     let (mut content, mut file_path) = match &cli.file {
         // CASE 1: User provided a path
@@ -99,13 +106,24 @@ fn main() -> Result<()> {
     };
 
     // Terminal capability check
-    let caps = output::capabilities::TermCaps::detect()?;
-    if !caps.has_kitty {
-        anyhow::bail!("Terminal does not support Kitty, use Kitty, WezTerm or Ghostty.")
+    let _caps = output::capabilities::TermCaps::detect()?;
+    if cli.force_kitty {
+        output::capabilities::force_kitty();
+    }
+    if !output::capabilities::has_kitty() {
+        if cli.math == crate::assets::math::MathMode::Image {
+            log::warn!(
+                "Terminal does not support Kitty graphics; falling back to Unicode math mode."
+            );
+            crate::assets::math::set_math_mode(crate::assets::math::MathMode::Unicode);
+        } else {
+            log::warn!(
+                "Terminal does not support Kitty graphics; images and diagrams will show as text."
+            );
+        }
     }
 
     let action = Arc::new(Mutex::new(AppAction::Quit));
-    let _edit_mode = cli.edit;
 
     loop {
         *action.lock().unwrap() = AppAction::Quit;
@@ -250,6 +268,10 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     Text(content: " gg/G ", color: theme::FG)
                 }
                 Text(content: " Top/Bottom ")
+                View(background_color: theme::DARK_GREY) {
+                    Text(content: " :math ", color: theme::FG)
+                }
+                Text(content: " Math mode ")
                 View(flex_grow: 1.0) {}
             }
         }

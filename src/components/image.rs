@@ -1,4 +1,5 @@
 use crate::debug;
+use crate::output::capabilities;
 use crate::output::graphics_manager::{
     GfxRect, GfxSource, IMAGE_HEIGHT_CACHE, ReleaseGuard, acquire, detach, dims, gfx_error, place,
     release,
@@ -33,6 +34,7 @@ pub struct ImageProps {
 
 #[component]
 pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
+    let label = props.alt.as_deref().unwrap_or(&props.url);
     element! {
         View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
             #(props.title.clone().map(|title| element! {
@@ -40,7 +42,15 @@ pub fn Image(props: &ImageProps, _hooks: Hooks) -> impl Into<AnyElement<'static>
                 Text(content: title, color: theme::COMMENT)
             }
             }))
-            KittyImage(url: props.url.clone(), file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
+            #(if capabilities::has_kitty() {
+                Some(element! {
+                    KittyImage(url: props.url.clone(), file_path: props.file_path.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
+                }.into_any())
+            } else {
+                Some(element! {
+                    Text(content: format!("[Image: {}]", label), color: theme::COMMENT)
+                }.into_any())
+            })
         }
     }
 }

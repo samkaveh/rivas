@@ -1,4 +1,5 @@
 use crate::debug;
+use crate::output::capabilities;
 use crate::output::graphics_manager::{
     GfxRect, GfxSource, IMAGE_HEIGHT_CACHE, ReleaseGuard, acquire, detach, dims, gfx_error, place,
     release,
@@ -31,7 +32,20 @@ pub struct MermaidBlockProps {
 pub fn MermaidBlock(props: &MermaidBlockProps, _hooks: Hooks) -> impl Into<AnyElement<'static>> {
     element! {
        View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
-           KittyMermaid(source: props.source.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
+           #(if capabilities::has_kitty() {
+               Some(element! {
+                   KittyMermaid(source: props.source.clone(), viewport_height: props.viewport_height, viewport_width: props.viewport_width, scroll_offset: props.scroll_offset)
+               }.into_any())
+           } else {
+               Some(element! {
+                   View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
+                       Text(content: "[Mermaid diagram]".to_string(), color: theme::COMMENT)
+                       #(props.source.lines().map(|line| element! {
+                           Text(content: line.to_string(), color: theme::FG)
+                       }).collect::<Vec<_>>())
+                   }
+               }.into_any())
+           })
        }
     }
 }
