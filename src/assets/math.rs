@@ -1,6 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::assets::asset_cache::{AssetCache, ImageData};
@@ -29,16 +30,29 @@ pub enum MathMode {
     Image,
 }
 
-static MATH_MODE: OnceLock<MathMode> = OnceLock::new();
+static MATH_MODE: AtomicU8 = AtomicU8::new(0);
 
-/// Set the global math rendering mode. Called once at startup from the CLI.
+/// Set the global math rendering mode. Called from CLI and at runtime (`:math`).
 pub fn set_math_mode(mode: MathMode) {
-    let _ = MATH_MODE.set(mode);
+    MATH_MODE.store(mode as u8, Ordering::Relaxed);
+}
+
+/// Toggle between Unicode and Image math mode. Returns the new mode.
+pub fn toggle_math_mode() -> MathMode {
+    let new = match MATH_MODE.load(Ordering::Relaxed) {
+        1 => MathMode::Unicode,
+        _ => MathMode::Image,
+    };
+    MATH_MODE.store(new as u8, Ordering::Relaxed);
+    new
 }
 
 /// Current math rendering mode (defaults to `Unicode`).
 pub fn math_mode() -> MathMode {
-    *MATH_MODE.get().unwrap_or(&MathMode::Unicode)
+    match MATH_MODE.load(Ordering::Relaxed) {
+        1 => MathMode::Image,
+        _ => MathMode::Unicode,
+    }
 }
 
 /// Convert a LaTeX expression to a Unicode text representation. Used as the
@@ -1156,5 +1170,21 @@ mod tests {
             "{} equations left raw LaTeX artifacts",
             bad.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod toggle_test {
+    use super::*;
+    #[test]
+    fn toggle_math_mode_works() {
+        set_math_mode(MathMode::Unicode);
+        assert_eq!(math_mode(), MathMode::Unicode);
+        let new = toggle_math_mode();
+        assert_eq!(new, MathMode::Image);
+        assert_eq!(math_mode(), MathMode::Image);
+        let new = toggle_math_mode();
+        assert_eq!(new, MathMode::Unicode);
+        assert_eq!(math_mode(), MathMode::Unicode);
     }
 }

@@ -52,7 +52,7 @@ struct Cli {
     /// Math rendering mode. `unicode` (default) shows formulas as Unicode
     /// glyphs that work in any terminal. `image` rasterizes them via the Kitty
     /// graphics protocol for pixel-perfect layout (needs Kitty/WezTerm/Ghostty).
-    #[arg(long, value_enum, default_value_t = crate::assets::math::MathMode::Unicode)]
+    #[arg(long, value_enum, default_value_t = crate::assets::math::MathMode::Image)]
     math: crate::assets::math::MathMode,
 }
 
@@ -263,6 +263,10 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     Text(content: " gg/G ", color: theme::FG)
                 }
                 Text(content: " Top/Bottom ")
+                View(background_color: theme::DARK_GREY) {
+                    Text(content: " :math ", color: theme::FG)
+                }
+                Text(content: " Math mode ")
                 View(flex_grow: 1.0) {}
             }
         }

@@ -168,6 +168,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             // Handle editing
             let mut quit = false;
             let mut changed = false;
+            let mut rerender = false;
             if let Some(s) = editor_state.write().as_mut() {
                 let before = s.buf.to_text();
                 s.view_height = vh.unwrap_or(20) as usize;
@@ -181,6 +182,10 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     changed = true;
                     on_change(after);
                 }
+                if s.needs_rerender {
+                    rerender = true;
+                    s.needs_rerender = false;
+                }
 
                 // Update global cursor offset
                 if let Some(mut off_ref) = cursor_offset.clone() {
@@ -193,7 +198,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 return;
             }
 
-            if changed {
+            if changed || rerender {
                 tick.set(tick.get().wrapping_add(1));
             }
 
