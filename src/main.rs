@@ -37,9 +37,6 @@ struct Cli {
     /// Theme: dark, light
     #[arg(short, long, default_value = "dark")]
     theme: String,
-    /// Open a side-by-side markdown editor and live preview.
-    #[arg(short, long)]
-    edit: bool,
     /// Enable debug mode: JSONL log to rivas-debug.jsonl + visual overlay annotations
     #[arg(long)]
     debug: bool,
@@ -118,7 +115,6 @@ fn main() -> Result<()> {
     }
 
     let action = Arc::new(Mutex::new(AppAction::Quit));
-    let _edit_mode = cli.edit;
 
     loop {
         *action.lock().unwrap() = AppAction::Quit;
