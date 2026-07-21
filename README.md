@@ -13,9 +13,11 @@ protocol.
 - Inline emphasis, strong text, strikethrough, inline code, links, and inline math.
 - Ordered, unordered, nested, and task lists.
 - Tables with Markdown alignment markers.
-- Local raster images.
-- Mermaid diagrams rendered to PNG.
-- LaTeX-style math rendered through MiTeX and Typst.
+- Local raster images (Kitty graphics or text fallback).
+- Mermaid diagrams rendered to PNG (Kitty graphics or text fallback).
+- LaTeX-style math with two rendering modes:
+  - **Unicode** (default): renders formulas as Unicode glyphs, works in any terminal.
+  - **Image**: rasterizes via the Kitty graphics protocol for pixel-perfect layout.
 - Vim-style source editing with a side-by-side live preview.
 - Vim-style keyboard navigation in the rendered viewer.
 
@@ -23,14 +25,16 @@ protocol.
 
 ## Requirements
 
-Rivas requires a terminal that supports the Kitty graphics protocol, such as:
+Rivas works best with a Kitty-compatible terminal for image and diagram
+rendering. Supported terminals:
 
 - Kitty
 - WezTerm
 - Ghostty
 
-If the terminal does not support the protocol, Rivas exits with an error instead
-of falling back to a degraded image mode.
+On other terminals, Rivas runs with text fallbacks: images show as
+`[Image: alt]`, mermaid diagrams show as `[Mermaid diagram]` with source code,
+and math uses Unicode glyphs.
 
 ## 🚀 Installation and Usage
 
@@ -55,7 +59,7 @@ Note: Only works with nightly WezTerm on windows (since other versions do not ha
 
 ```bash
 # Download the binary
-curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.2.14/rivas-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.3.0/rivas-x86_64-unknown-linux-gnu.tar.gz
 
 # Extract and install
 tar -xzf rivas-x86_64-unknown-linux-gnu.tar.gz
@@ -71,6 +75,45 @@ rivas examples/all-rendering-cases.md
 ## Editing
 
 Rivas supports edit in place with neovim style editting and key shortcuts.
+
+## CLI Options
+
+```sh
+rivas [OPTIONS] [FILE]
+```
+
+| Option | Description |
+|---|---|
+| `--math <MODE>` | Math rendering mode: `unicode` (default) or `image`. Unicode works everywhere; image requires Kitty graphics. |
+| `--force-kitty` | Force Kitty graphics protocol even if the terminal is not auto-detected. Use if your terminal supports Kitty but isn't recognized. |
+| `-t, --theme <THEME>` | Color theme: `dark` (default) or `light`. |
+| `--debug` | Enable debug logging and visual overlay annotations. |
+
+### Math Modes
+
+**Unicode mode** (`--math unicode`, the default) converts LaTeX formulas to
+Unicode glyphs. This works in any terminal and is fast.
+
+**Image mode** (`--math image`) rasterizes formulas via the Kitty graphics
+protocol for pixel-perfect rendering. Requires a Kitty-compatible terminal
+(Kitty, WezTerm, or Ghostty). If the terminal is not recognized, Rivas
+automatically falls back to Unicode mode with a warning.
+
+You can also switch math modes at runtime by pressing `:` in Normal mode and
+typing `math unicode`, `math image`, or just `math` to toggle.
+
+### Force Kitty Graphics
+
+If your terminal supports the Kitty graphics protocol but is not auto-detected,
+use `--force-kitty` to enable it:
+
+```sh
+rivas --force-kitty --math image document.md
+```
+
+This overrides the terminal detection and attempts Kitty graphics for images,
+diagrams, and image-mode math. If the terminal doesn't actually support the
+protocol, images and diagrams will simply not render.
 
 ## Supported Markdown Notes
 
@@ -91,6 +134,9 @@ $$
 \Delta(Rivas) = \delta(rivas) \times \frac{2}{2}
 ```
 ````
+
+Press `:math` in Normal mode to toggle between Unicode and Image rendering
+at runtime, or use `:math unicode` / `:math image` to switch directly.
 
 Mermaid diagrams use fenced `mermaid` blocks:
 
