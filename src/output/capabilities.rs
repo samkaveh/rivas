@@ -1,4 +1,21 @@
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global kitty support flag. Set once during `TermCaps::detect()`, can be
+/// overridden by `--force-kitty`.
+static HAS_KITTY: AtomicBool = AtomicBool::new(false);
+
+/// Returns `true` if the terminal supports the Kitty graphics protocol.
+/// Checks the global flag set during capability detection (or overridden by
+/// `--force-kitty`).
+pub fn has_kitty() -> bool {
+    HAS_KITTY.load(Ordering::Relaxed)
+}
+
+/// Force-set the global kitty support flag. Used by `--force-kitty`.
+pub fn force_kitty() {
+    HAS_KITTY.store(true, Ordering::Relaxed);
+}
 
 #[derive(Clone, Debug)]
 pub struct TermCaps {
@@ -25,12 +42,14 @@ impl TermCaps {
     pub fn detect() -> Result<Self> {
         let (cols, rows) = crossterm::terminal::size()?;
         let (cell_w_px, cell_h_px) = cell_pixel_size().unwrap_or((8, 16));
+        let kitty = detect_kitty();
+        HAS_KITTY.store(kitty, Ordering::Relaxed);
         Ok(Self {
             cols,
             rows,
             cell_w_px,
             cell_h_px,
-            has_kitty: has_kitty(),
+            has_kitty: kitty,
         })
     }
 
@@ -64,7 +83,7 @@ fn cell_pixel_size() -> Option<(u16, u16)> {
     None
 }
 
-fn has_kitty() -> bool {
+fn detect_kitty() -> bool {
     let t = std::env::var("TERM").unwrap_or_default();
     let p = std::env::var("TERM_PROGRAM").unwrap_or_default();
     t.contains("kitty")

@@ -51,6 +51,10 @@ struct Cli {
     /// graphics protocol for pixel-perfect layout (needs Kitty/WezTerm/Ghostty).
     #[arg(long, value_enum, default_value_t = crate::assets::math::MathMode::Image)]
     math: crate::assets::math::MathMode,
+    /// Force Kitty graphics protocol even if the terminal is not recognized.
+    /// Use this if your terminal supports Kitty but is not auto-detected.
+    #[arg(long)]
+    force_kitty: bool,
 }
 
 /// Whether debug JSON logging is enabled (from --debug or --debug-json-only)
@@ -102,16 +106,21 @@ fn main() -> Result<()> {
     };
 
     // Terminal capability check
-    let caps = output::capabilities::TermCaps::detect()?;
-    if !caps.has_kitty && cli.math == crate::assets::math::MathMode::Image {
-        anyhow::bail!(
-            "Image math mode requires a Kitty-compatible terminal (Kitty, WezTerm, Ghostty)."
-        )
+    let _caps = output::capabilities::TermCaps::detect()?;
+    if cli.force_kitty {
+        output::capabilities::force_kitty();
     }
-    if !caps.has_kitty {
-        log::warn!(
-            "Terminal does not support Kitty graphics; images and diagrams will not render."
-        );
+    if !output::capabilities::has_kitty() {
+        if cli.math == crate::assets::math::MathMode::Image {
+            log::warn!(
+                "Terminal does not support Kitty graphics; falling back to Unicode math mode."
+            );
+            crate::assets::math::set_math_mode(crate::assets::math::MathMode::Unicode);
+        } else {
+            log::warn!(
+                "Terminal does not support Kitty graphics; images and diagrams will show as text."
+            );
+        }
     }
 
     let action = Arc::new(Mutex::new(AppAction::Quit));
