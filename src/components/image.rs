@@ -157,6 +157,21 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
             }
         }
         .into_any()
+    } else if gfx.is_loading() {
+        let label = props.url.split('/').last().unwrap_or(&props.url);
+        element! {
+            View(
+                height: gfx.declared_rows.max(1),
+                padding_left: 1,
+                border_style: BorderStyle::Single,
+                border_color: theme::border(),
+                background_color: theme::dark_bg(),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+            ) {
+                Text(content: format!("⏳ Loading image ({label})..."), color: theme::comment())
+            }
+        }.into_any()
     } else {
         element! {View(width: cols.max(1), height: gfx.declared_rows.max(1))}.into_any()
     }

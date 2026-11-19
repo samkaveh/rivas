@@ -281,6 +281,17 @@ pub fn KittyMath(props: &KittyMathProps, mut hooks: Hooks) -> impl Into<AnyEleme
             }
         }
         .into_any()
+    } else if gfx.is_loading() {
+        element! {
+            View(
+                height: gfx.declared_rows.max(1),
+                padding_left: 1,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+            ) {
+                Text(content: "⏳ Rendering formula...", color: theme::comment())
+            }
+        }.into_any()
     } else {
         element! {View(width: cols.max(1), height: gfx.declared_rows.max(1))}.into_any()
     }

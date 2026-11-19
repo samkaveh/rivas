@@ -163,6 +163,20 @@ pub fn KittyMermaid(props: &KittyMermaidProps, mut hooks: Hooks) -> impl Into<An
             }
         }
         .into_any()
+    } else if gfx.is_loading() {
+        element! {
+            View(
+                height: gfx.declared_rows.max(1),
+                padding_left: 1,
+                border_style: BorderStyle::Single,
+                border_color: theme::border(),
+                background_color: theme::dark_bg(),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+            ) {
+                Text(content: "⏳ Rendering Mermaid diagram...", color: theme::comment())
+            }
+        }.into_any()
     } else {
         element! {View(width: cols.max(1), height: gfx.declared_rows.max(1))}.into_any()
     }
