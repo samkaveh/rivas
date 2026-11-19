@@ -12,6 +12,7 @@ mod debug;
 mod document;
 mod lib_file_cache;
 mod output;
+mod server;
 mod theme;
 
 use crate::components::document::Document;
@@ -29,7 +30,7 @@ enum AppAction {
 /// Switches to `new_path`, first auto-saving the current buffer to *its own*
 /// file (never the file being opened) when modified on disk.
 fn switch_file(old_path: &PathBuf, new_path: &PathBuf, content: &str) -> anyhow::Result<String> {
-    if old_path != new_path && old_path.exists() {
+    if old_path != new_path && old_path.exists() && old_path.is_file() {
         if let Ok(on_disk) = fs::read_to_string(old_path) {
             if on_disk != content {
                 let _ = fs::write(old_path, content);
@@ -81,6 +82,15 @@ struct Cli {
     /// If only one axis is given, the other defaults to 8.
     #[arg(long)]
     cell_height: Option<u16>,
+    /// Serve in the browser with live reload and full browser rendering
+    #[arg(long)]
+    serve: bool,
+    /// Port for the browser server (default: 3000)
+    #[arg(long, default_value_t = 3000)]
+    port: u16,
+    /// Do not automatically open the browser when serving
+    #[arg(long)]
+    no_open: bool,
 }
 
 /// Whether debug JSON logging is enabled (from --debug or --debug-json-only)
@@ -93,9 +103,45 @@ fn debug_annotations_enabled(cli: &Cli) -> bool {
     cli.debug_annotations || cli.debug
 }
 
+fn find_initial_file_in_dir(dir: &std::path::Path) -> (Option<PathBuf>, String) {
+    if let Some(path) = server::find_default_markdown(dir) {
+        if let Ok(text) = fs::read_to_string(&path) {
+            return (Some(path), text);
+        }
+    }
+    (None, String::new())
+}
+
 fn main() -> Result<()> {
     env_logger::init();
-    let cli = Cli::parse();
+
+    // Support `rivas serve [path] [options]` by converting first argument "serve" to "--serve"
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let mut rewritten_args = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        if i == 1 && arg == "serve" {
+            rewritten_args.push(std::ffi::OsString::from("--serve"));
+        } else {
+            rewritten_args.push(arg.clone());
+        }
+    }
+    let cli = Cli::parse_from(rewritten_args);
+
+    if cli.serve {
+        let input_path = cli.file.unwrap_or_else(|| PathBuf::from("."));
+        let (root_dir, initial_file) = if input_path.is_file() {
+            let parent = input_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            (parent, Some(input_path))
+        } else {
+            let init = server::find_default_markdown(&input_path);
+            (input_path, init)
+        };
+        return server::run_server(root_dir, initial_file, cli.port, !cli.no_open, &cli.theme);
+    }
+
     if !theme::set_by_name(&cli.theme) {
         anyhow::bail!(
             "Unknown theme '{}'. Available themes: {}",
@@ -106,34 +152,44 @@ fn main() -> Result<()> {
     debug::init(debug_json_enabled(&cli), debug_annotations_enabled(&cli));
     crate::assets::math::set_math_mode(cli.math);
 
-    let (mut content, mut file_path) = match &cli.file {
+    let (mut content, mut file_path, base_dir, initial_show_tree) = match &cli.file {
         // CASE 1: User provided a path
         Some(path) => {
-            if !path.exists() {
+            if path.is_dir() {
+                let canon = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                let (file, text) = find_initial_file_in_dir(&canon);
+                (text, file, canon, true)
+            } else if path.exists() {
+                let text = fs::read_to_string(path)?;
+                let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let canon_dir = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+                (text, Some(path.clone()), canon_dir, false)
+            } else {
                 // Create the file (and parent directories) if it doesn't exist
                 if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
+                    if !parent.as_os_str().is_empty() {
+                        fs::create_dir_all(parent)?;
+                    }
                 }
                 fs::File::create(path)?;
-                (String::new(), Some(path.clone()))
-            } else {
-                (fs::read_to_string(path)?, Some(path.clone()))
+                let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let canon_dir = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+                (String::new(), Some(path.clone()), canon_dir, false)
             }
         }
-        // CASE 2: No path provided - Check for Pipe vs. New Default File
+        // CASE 2: No path provided - Check for Pipe vs. Current Directory
         None => {
             if !stdin().is_terminal() {
                 // Data is being piped in (e.g., `echo "# Hi" | rivas`)
                 let mut s = String::new();
                 stdin().read_to_string(&mut s)?;
-                (s, None)
+                let cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                (s, None, cur, false)
             } else {
-                // No pipe and no arg: Open a default new file
-                let default_path = PathBuf::from("untitled.md");
-                if !default_path.exists() {
-                    fs::File::create(&default_path)?;
-                }
-                (String::new(), Some(default_path))
+                // No pipe and no arg: Open current directory and show file tree!
+                let cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let (file, text) = find_initial_file_in_dir(&cur);
+                (text, file, cur, true)
             }
         }
     };
@@ -168,6 +224,8 @@ fn main() -> Result<()> {
         }
     }
 
+    let current_file_path = Arc::new(Mutex::new(file_path.clone()));
+    let current_content = Arc::new(Mutex::new(content.clone()));
     let action = Arc::new(Mutex::new(AppAction::Quit));
 
     loop {
@@ -176,10 +234,14 @@ fn main() -> Result<()> {
         smol::block_on(
             element!(App(
                 file_path: file_path.clone(),
+                base_dir: base_dir.clone(),
+                initial_show_tree: initial_show_tree,
                 content: content.as_str(),
                 action: action.clone(),
                 debug: debug_json_enabled(&cli),
                 debug_annotations: debug_annotations_enabled(&cli),
+                current_file_path: current_file_path.clone(),
+                current_content: current_content.clone(),
             ))
             .fullscreen(),
         )?;
@@ -188,18 +250,24 @@ fn main() -> Result<()> {
         match next_action {
             AppAction::Quit => break,
             AppAction::SearchFile => {
+                file_path = current_file_path.lock().unwrap().clone();
+                content = current_content.lock().unwrap().clone();
                 if let Some(selected) = run_fuzzy_finder() {
                     // Auto-save current file if it exists and content is modified
                     if let Some(ref path) = file_path {
-                        if let Ok(on_disk) = fs::read_to_string(path) {
-                            if on_disk != content {
-                                let _ = fs::write(path, &content);
+                        if path.is_file() {
+                            if let Ok(on_disk) = fs::read_to_string(path) {
+                                if on_disk != content {
+                                    let _ = fs::write(path, &content);
+                                }
                             }
                         }
                     }
                     if let Ok(new_content) = fs::read_to_string(&selected) {
-                        content = new_content;
-                        file_path = Some(selected);
+                        content = new_content.clone();
+                        file_path = Some(selected.clone());
+                        *current_file_path.lock().unwrap() = Some(selected);
+                        *current_content.lock().unwrap() = new_content;
                     }
                 }
             }
@@ -212,10 +280,14 @@ fn main() -> Result<()> {
 #[derive(Default, Props)]
 struct AppProps<'a> {
     file_path: Option<PathBuf>,
+    base_dir: PathBuf,
+    initial_show_tree: bool,
     content: &'a str,
     action: Arc<Mutex<AppAction>>,
     debug: bool,
     debug_annotations: bool,
+    current_file_path: Arc<Mutex<Option<PathBuf>>>,
+    current_content: Arc<Mutex<String>>,
 }
 
 #[component]
@@ -223,21 +295,11 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let (width, height) = hooks.use_terminal_size();
     let mut system = hooks.use_context_mut::<SystemContext>();
     let should_exit = hooks.use_state(|| false);
-    let path = props.file_path.clone().unwrap_or_default();
-    let _path_name = path
-        .to_str()
-        .filter(|name| !name.is_empty())
-        .unwrap_or("untitled.md")
-        .to_string();
     let content = hooks.use_state(|| props.content.to_string());
-    let current_path = hooks.use_state(|| props.file_path.clone().unwrap_or_default());
+    let current_path = hooks.use_state(|| props.file_path.clone());
     let path = {
         let p = current_path.read().clone();
-        if p.as_os_str().is_empty() {
-            PathBuf::from("untitled.md")
-        } else {
-            p
-        }
+        p.unwrap_or_else(|| props.base_dir.clone())
     };
     let mouse_captured = hooks.use_state(|| false);
     let cursor_offset = hooks.use_ref(|| 0usize);
@@ -281,12 +343,18 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     // are atomic w.r.t. iocraft/crossterm output.
     graphics_manager::flush_output();
     let current_content = content.read().clone();
-    let on_change = hooks.use_async_handler(move |next_content: String| {
-        let mut content = content.clone();
-        async move {
-            content.set(next_content);
-        }
-    });
+    let on_change = {
+        let content = content.clone();
+        let shared = props.current_content.clone();
+        hooks.use_async_handler(move |next_content: String| {
+            let mut content = content.clone();
+            let shared = shared.clone();
+            async move {
+                *shared.lock().unwrap() = next_content.clone();
+                content.set(next_content);
+            }
+        })
+    };
     let on_quit = hooks.use_async_handler(move |()| {
         let mut should_exit = should_exit.clone();
         async move {
@@ -298,17 +366,23 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         let content = content.clone();
         let current_path = current_path.clone();
         let status_msg = status_msg.clone();
+        let shared_path = props.current_file_path.clone();
+        let shared_content = props.current_content.clone();
         hooks.use_async_handler(move |path: PathBuf| {
             let mut content = content.clone();
             let mut current_path = current_path.clone();
             let mut status_msg = status_msg.clone();
+            let shared_path = shared_path.clone();
+            let shared_content = shared_content.clone();
             async move {
-                let old_path = current_path.read().clone();
+                let old_path = current_path.read().clone().unwrap_or_default();
                 let buffer = content.read().clone();
                 match switch_file(&old_path, &path, &buffer) {
                     Ok(text) => {
+                        *shared_path.lock().unwrap() = Some(path.clone());
+                        *shared_content.lock().unwrap() = text.clone();
                         content.set(text);
-                        current_path.set(path.clone());
+                        current_path.set(Some(path.clone()));
                         let name = path
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
@@ -324,7 +398,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_else(|| path.display().to_string());
-                        status_msg.set(Some((false, format!("✗ Not a text file: {name}"))))
+                        status_msg.set(Some((false, format!("✗ Not a text file: {name}"))));
                     }
                 }
             }
@@ -336,6 +410,8 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             Document(
                 content: current_content,
                 file_path: path,
+                base_dir: Some(props.base_dir.clone()),
+                initial_show_tree: Some(props.initial_show_tree),
                 viewport_height: height.saturating_sub(1) as u32,
                 viewport_width: width as u32,
                 keyboard_navigation: Some(true),

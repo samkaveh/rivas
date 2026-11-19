@@ -20,15 +20,16 @@ pub struct FileNode {
 impl FileNode {
     /// Builds the root node for `dir`, listing one level of entries.
     pub fn from_dir(dir: &Path) -> Option<FileNode> {
+        let canonical_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         Some(FileNode {
-            name: dir
+            name: canonical_dir
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| dir.display().to_string()),
-            path: dir.to_path_buf(),
+                .unwrap_or_else(|| canonical_dir.display().to_string()),
+            path: canonical_dir.clone(),
             is_dir: true,
             expanded: true,
-            children: read_dir_sorted(dir)?,
+            children: read_dir_sorted(&canonical_dir)?,
         })
     }
 

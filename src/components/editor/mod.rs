@@ -476,6 +476,7 @@ impl EditorState {
     /// - `:wq!` — force write and quit
     /// - `:N` — jump to line number N
     /// - `:math` / `:math unicode` / `:math image` — toggle math rendering mode
+    /// - `:serve` / `:browser` — serve markdown in the browser with live reload
     pub(crate) fn execute_command(&mut self) -> bool {
         let cmd = self.cmd_buf.clone();
         self.cmd_buf.clear();
@@ -487,6 +488,11 @@ impl EditorState {
         }
         match cmd.trim() {
             "w" | "write" => {
+                let p = std::path::Path::new(&self.filename);
+                if self.filename.is_empty() || p.is_dir() {
+                    self.message = "E: No file name".into();
+                    return false;
+                }
                 match std::fs::write(&self.filename, self.buf.to_text()) {
                     Ok(_) => {
                         self.modified = false;
@@ -543,6 +549,32 @@ impl EditorState {
                 math::set_math_mode(MathMode::Image);
                 self.message = "Math mode: image".into();
                 self.needs_rerender = true;
+                false
+            }
+            "serve" | "browser" | "web" => {
+                let p = std::path::Path::new(&self.filename);
+                let root = if p.is_file() {
+                    p.parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .to_path_buf()
+                } else if p.is_dir() {
+                    p.to_path_buf()
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                };
+                let cur_file = if p.is_file() {
+                    Some(p.to_path_buf())
+                } else {
+                    None
+                };
+                match crate::server::start_background_server(root, cur_file, 3000) {
+                    Ok(url) => {
+                        self.message = format!("Serving at {}", url);
+                    }
+                    Err(e) => {
+                        self.message = format!("E: Failed to start server: {}", e);
+                    }
+                }
                 false
             }
             other => {

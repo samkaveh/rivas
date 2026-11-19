@@ -106,7 +106,11 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
     // graphic id (which would let one occurrence's detach/place clobber others).
     let cache_key = format!("{}:{}", vw, props.url);
     let url = props.url.clone();
-    let base_dir = props.file_path.parent().map(|p| p.to_path_buf());
+    let base_dir = if props.file_path.is_dir() {
+        Some(props.file_path.clone())
+    } else {
+        props.file_path.parent().map(|p| p.to_path_buf())
+    };
     let gfx: KittyGraphic = hooks.use_kitty_graphic(
         cache_key,
         vw,

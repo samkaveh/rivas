@@ -15,6 +15,8 @@ protocol.
 - Footnotes with numeric or named labels.
 - Tables with Markdown alignment markers.
 - Six built-in color themes, switchable at runtime with `Ctrl+T`.
+- Folder browsing: open entire folders (`rivas .` or `rivas folder/`) with an integrated sidebar file tree (`\`).
+- Browser preview server with live reload: browse and view rendered Markdown in your web browser with KaTeX math, Mermaid diagrams, and instant hot-reload on save (`rivas serve` or `:serve`).
 - Local raster images (Kitty graphics or text fallback).
 - Mermaid diagrams rendered to PNG (Kitty graphics or text fallback).
 - LaTeX-style math with two rendering modes:
@@ -81,17 +83,62 @@ Rivas supports edit in place with neovim style editting and key shortcuts.
 ## CLI Options
 
 ```sh
-rivas [OPTIONS] [FILE]
+rivas [OPTIONS] [PATH]
+rivas serve [OPTIONS] [PATH]
 ```
 
 | Option | Description |
 |---|---|
+| `--serve` | Start browser server with live reload and rich web rendering. |
+| `--port <PORT>` | Port for the browser server (default: 3000). |
+| `--no-open` | Do not automatically open the browser when serving. |
 | `--math <MODE>` | Math rendering mode: `unicode` (default) or `image`. Unicode works everywhere; image requires Kitty graphics. |
 | `--force-kitty` | Force Kitty graphics protocol even if the terminal is not auto-detected. Use if your terminal supports Kitty but isn't recognized. |
 | `-t, --theme <THEME>` | Color theme: `tokyo-night` (default), `dracula`, `nord`, `gruvbox-dark`, `catppuccin-mocha`, or `solarized-light`. Can also be switched at runtime with `Ctrl+T`. |
 | `--cell-width <PX>` | Override the pixel width of a terminal cell. Graphics are shown at their natural size mapped onto this cell, so this grows/shrinks images, diagrams, and formulas. Use to correct a terminal whose `TIOCGWINSZ` pixel size is wrong (e.g., a secondary display). If only one axis is given, the other defaults to its standard value (16). |
 | `--cell-height <PX>` | Override the pixel height of a terminal cell (see `--cell-width`). If only one axis is given, the other defaults to 8. |
 | `--debug` | Enable debug logging and visual overlay annotations. |
+
+### 📂 Opening Folders and File Tree
+
+You can open entire folders directly without specifying a starting file:
+
+```sh
+rivas .
+rivas docs/
+rivas /path/to/notes
+```
+
+Running `rivas` with no arguments in a terminal will automatically open the current directory.
+
+- Rivas opens with the sidebar file tree visible on the left.
+- If a `README.md` or `index.md` exists in the folder, it is displayed immediately.
+- Use `↑`/`↓` to navigate files, `Enter` to open or toggle folders, and `\` to toggle the sidebar at any time.
+
+### 🌐 Serving in the Browser
+
+Leverage your web browser's native rendering capabilities (crisp typography, KaTeX LaTeX math, interactive Mermaid.js diagrams, syntax highlighted code, and live hot-reload on save):
+
+**From the CLI:**
+```sh
+# Serve the current directory and open the browser:
+rivas serve
+
+# Or serve a specific folder or file:
+rivas serve docs/
+rivas docs/ --serve
+rivas serve README.md --port 8080
+```
+
+**From inside the TUI editor:**
+Press `:` in Normal mode and type `:serve` or `:browser`. Rivas will start the background server and open your current document in the browser immediately.
+
+**Browser Features:**
+- **Sidebar File Explorer**: Collapsible folder tree with real-time file search/filter (`Ctrl+P` or `/`).
+- **Live Reload (SSE)**: Automatically reloads whenever any Markdown file is edited and saved. Scroll position is preserved across reloads.
+- **Rich Rendering**: KaTeX math ($...$ and $$...$$), Mermaid diagrams, GitHub-flavored tables, task lists, and relative image resolution.
+- **Theme Switcher**: Toggle between Tokyo Night dark theme and clean light theme (`Ctrl+T` or header button).
+- **Raw View & Copy**: View raw Markdown or copy with one click.
 
 ### Themes
 
