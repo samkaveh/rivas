@@ -21,6 +21,10 @@ pub struct DocumentProps {
     pub content: String,
     /// File path for resolving relative image/link URLs.
     pub file_path: PathBuf,
+    /// Base directory for the workspace / file tree.
+    pub base_dir: Option<PathBuf>,
+    /// Whether to open the file tree sidebar initially.
+    pub initial_show_tree: Option<bool>,
     /// Height of the visible viewport in lines (for scrolling).
     pub viewport_height: Option<u32>,
     /// Width of the visible viewport in columns (for line wrapping).
@@ -101,15 +105,17 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         {
             let mut editor_state = editor_state.clone();
             let content = content_prop.clone();
+            let path_str = props.file_path.to_string_lossy().to_string();
             move || {
                 if let Some(s) = editor_state.write().as_mut() {
+                    s.filename = path_str.clone();
                     if s.buf.to_text() != content {
                         s.buf = Buffer::new(&content);
                     }
                 }
             }
         },
-        content_prop.clone(),
+        (content_prop.clone(), props.file_path.clone()),
     );
 
     // Use parse cache to memoize markdown parsing
@@ -144,8 +150,19 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     let on_quit = props.on_quit.clone();
 
     // ── File tree sidebar state ────────────────────────────────────────────
-    let show_tree = hooks.use_state(|| false);
-    let tree_root = hooks.use_ref(|| None::<FileNode>);
+    let show_tree = hooks.use_state(|| props.initial_show_tree.unwrap_or(false));
+    let base_workspace = props
+        .base_dir
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let tree_root = hooks.use_ref(|| {
+        if props.initial_show_tree.unwrap_or(false) {
+            FileNode::from_dir(&base_workspace)
+        } else {
+            None
+        }
+    });
     let mut tree_selected = hooks.use_state(|| 0usize);
     let on_open_file = props.on_open_file.clone();
 
@@ -223,9 +240,11 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         let mut tree_root = tree_root.clone();
         let mut tree_selected = tree_selected.clone();
         let on_open_file = on_open_file.clone();
-        // Tree root = the working directory rivas was launched from, so the
-        // whole project is browsable, not just the open file's folder.
-        let tree_base_dir = std::env::current_dir().ok();
+        // Tree root = the workspace or directory rivas was launched from.
+        let tree_base_dir = props
+            .base_dir
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
         move |event| {
             let TerminalEvent::Key(KeyEvent {
                 code,
