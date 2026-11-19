@@ -785,6 +785,18 @@ impl GraphicsManager {
             })
         })
     }
+
+    pub fn pending_count(&self) -> usize {
+        self.registry
+            .lock()
+            .ok()
+            .map(|r| {
+                r.values()
+                    .filter(|e| matches!(e.status, EntryStatus::Loading))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -825,6 +837,11 @@ pub fn dims(key: &str) -> Option<(u32, u32)> {
 /// Returns the error message for a graphic key, if it failed to load.
 pub fn gfx_error(key: &str) -> Option<String> {
     graphics().error(key)
+}
+
+/// Returns the number of graphics currently being loaded in the background.
+pub fn pending_graphics_count() -> usize {
+    graphics().pending_count()
 }
 
 /// Drain the pending kitty output buffer to stdout.  Must be called from the

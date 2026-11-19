@@ -305,6 +305,18 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let cursor_offset = hooks.use_ref(|| 0usize);
     // Feedback for file-open actions (success or failure) shown in the bar.
     let status_msg = hooks.use_state(|| None::<(bool, String)>);
+    // Tick counter used to drive re-renders while graphics are loading.
+    // The future polls pending_graphics_count() every 100 ms and bumps the
+    // counter whenever rendering is in progress so the status badge updates.
+    let mut render_tick = hooks.use_state(|| 0u8);
+    hooks.use_future(async move {
+        loop {
+            smol::Timer::after(std::time::Duration::from_millis(100)).await;
+            if graphics_manager::pending_graphics_count() > 0 {
+                render_tick.set(render_tick.get().wrapping_add(1));
+            }
+        }
+    });
 
     hooks.use_terminal_events({
         let mut should_exit = should_exit;
@@ -375,6 +387,11 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
             let shared_path = shared_path.clone();
             let shared_content = shared_content.clone();
             async move {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                status_msg.set(Some((true, format!("Loading: {name}..."))));
                 let old_path = current_path.read().clone().unwrap_or_default();
                 let buffer = content.read().clone();
                 match switch_file(&old_path, &path, &buffer) {
@@ -383,10 +400,6 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                         *shared_content.lock().unwrap() = text.clone();
                         content.set(text);
                         current_path.set(Some(path.clone()));
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| path.display().to_string());
                         if old_path == path {
                             status_msg.set(Some((true, format!("Opened: {name}"))));
                         } else {
@@ -394,10 +407,6 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                         }
                     }
                     Err(_) => {
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| path.display().to_string());
                         status_msg.set(Some((false, format!("✗ Not a text file: {name}"))));
                     }
                 }
@@ -467,6 +476,21 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     }.into_any())
                 }.into_iter())
                 View(flex_grow: 1.0) {}
+                #({
+                    // `render_tick` is read here so iocraft re-renders the
+                    // status bar on every tick while graphics are loading.
+                    let _t = render_tick.get();
+                    let count = graphics_manager::pending_graphics_count();
+                    if count > 0 {
+                        Some(element! {
+                            View(background_color: theme::blue(), margin_right: 1, padding_left: 1, padding_right: 1) {
+                                Text(content: format!(" ⟳ Rendering ({count}) "), color: theme::dark_bg(), weight: Weight::Bold)
+                            }
+                        }.into_any())
+                    } else {
+                        None
+                    }
+                }.into_iter())
             }
         }
     }

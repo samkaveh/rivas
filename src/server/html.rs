@@ -45,6 +45,7 @@ pub fn build_page_html(
             --badge-bg: #414868;
             --badge-fg: #c0caf5;
             --success: #9ece6a;
+            --warning: #e0af68;
             --shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
             --sidebar-width: 290px;
             --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -69,6 +70,7 @@ pub fn build_page_html(
             --badge-bg: #e1e4e8;
             --badge-fg: #24292f;
             --success: #1a7f37;
+            --warning: #d97706;
             --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
         }}
 
@@ -87,6 +89,25 @@ pub fn build_page_html(
             overflow: hidden;
             line-height: 1.65;
             font-size: 15px;
+        }}
+
+        /* ── Top Progress Bar ── */
+        #progress-bar {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            width: 0%;
+            background: linear-gradient(90deg, var(--accent), var(--accent-hover), #bb9af7);
+            box-shadow: 0 0 10px var(--accent);
+            z-index: 9999;
+            transition: width 0.25s ease, opacity 0.3s ease;
+            pointer-events: none;
+            opacity: 0;
+        }}
+
+        #progress-bar.active {{
+            opacity: 1;
         }}
 
         /* ── Sidebar ── */
@@ -316,13 +337,14 @@ pub fn build_page_html(
         .status-badge {{
             display: flex;
             align-items: center;
-            gap: 6px;
-            font-size: 11.5px;
-            color: var(--fg-dim);
-            padding: 4px 8px;
+            gap: 7px;
+            font-size: 12px;
+            color: var(--fg-muted);
+            padding: 4px 10px;
             border-radius: 12px;
             background: var(--bg-panel);
             border: 1px solid var(--border);
+            transition: all 0.2s ease;
         }}
 
         .status-dot {{
@@ -331,13 +353,31 @@ pub fn build_page_html(
             border-radius: 50%;
             background-color: var(--success);
             box-shadow: 0 0 8px var(--success);
-            animation: pulse 2s infinite;
+            transition: all 0.2s ease;
+        }}
+
+        .status-dot.loading {{
+            background-color: var(--warning);
+            box-shadow: 0 0 8px var(--warning);
+            animation: pulse-spin 0.8s infinite linear;
+        }}
+
+        .status-dot.rendering {{
+            background-color: var(--accent);
+            box-shadow: 0 0 8px var(--accent);
+            animation: pulse 1s infinite ease-in-out;
         }}
 
         @keyframes pulse {{
-            0% {{ opacity: 0.6; transform: scale(0.9); }}
-            50% {{ opacity: 1; transform: scale(1.1); }}
-            100% {{ opacity: 0.6; transform: scale(0.9); }}
+            0% {{ opacity: 0.5; transform: scale(0.85); }}
+            50% {{ opacity: 1; transform: scale(1.15); }}
+            100% {{ opacity: 0.5; transform: scale(0.85); }}
+        }}
+
+        @keyframes pulse-spin {{
+            0% {{ opacity: 0.4; transform: scale(0.8); }}
+            50% {{ opacity: 1; transform: scale(1.2); }}
+            100% {{ opacity: 0.4; transform: scale(0.8); }}
         }}
 
         /* ── Scrollable Content Area ── */
@@ -351,6 +391,11 @@ pub fn build_page_html(
         .markdown-wrapper {{
             max-width: 880px;
             margin: 0 auto;
+            transition: opacity 0.15s ease;
+        }}
+
+        .markdown-wrapper.loading {{
+            opacity: 0.5;
         }}
 
         /* ── Markdown Typography ── */
@@ -662,6 +707,8 @@ pub fn build_page_html(
     </style>
 </head>
 <body>
+    <div id="progress-bar"></div>
+
     <!-- Sidebar -->
     <aside id="sidebar">
         <div class="sidebar-header">
@@ -696,9 +743,9 @@ pub fn build_page_html(
                 </div>
             </div>
             <div class="nav-right">
-                <div class="status-badge">
-                    <div class="status-dot"></div>
-                    <span>Live</span>
+                <div class="status-badge" id="status-pill">
+                    <div class="status-dot" id="status-dot"></div>
+                    <span id="status-text">Live</span>
                 </div>
                 <button class="nav-btn" id="theme-btn" onclick="toggleTheme()" title="Switch Theme (Ctrl+T)">
                     🌙
@@ -757,6 +804,43 @@ pub fn build_page_html(
             sb.classList.toggle('collapsed');
         }}
 
+        // ── Status Indicator ──
+        function setStatus(type, text) {{
+            const dot = document.getElementById('status-dot');
+            const span = document.getElementById('status-text');
+            if (!dot || !span) return;
+            dot.className = 'status-dot ' + type;
+            span.textContent = text;
+        }}
+
+        // ── Progress Bar ──
+        let progressTimer = null;
+        function startProgressBar() {{
+            const bar = document.getElementById('progress-bar');
+            if (!bar) return;
+            clearTimeout(progressTimer);
+            bar.classList.add('active');
+            bar.style.width = '20%';
+            progressTimer = setTimeout(() => {{
+                if (bar.classList.contains('active')) {{
+                    bar.style.width = '70%';
+                }}
+            }}, 120);
+        }}
+
+        function finishProgressBar() {{
+            const bar = document.getElementById('progress-bar');
+            if (!bar) return;
+            clearTimeout(progressTimer);
+            bar.style.width = '100%';
+            setTimeout(() => {{
+                bar.classList.remove('active');
+                setTimeout(() => {{
+                    bar.style.width = '0%';
+                }}, 250);
+            }}, 150);
+        }}
+
         // ── Raw vs Rendered ──
         let isRaw = false;
         function toggleRaw() {{
@@ -782,41 +866,56 @@ pub fn build_page_html(
             }});
         }}
 
-        // ── KaTeX Math Rendering ──
-        document.addEventListener('DOMContentLoaded', () => {{
+        // ── Rich Content Rendering (KaTeX, Mermaid, Highlight.js) ──
+        async function renderRichContent() {{
+            const mdBody = document.getElementById('markdown-body');
+            if (!mdBody) return;
+
+            // 1. Math Rendering
             if (typeof renderMathInElement !== 'undefined') {{
-                renderMathInElement(document.getElementById('markdown-body'), {{
-                    delimiters: [
-                        {{ left: '$$', right: '$$', display: true }},
-                        {{ left: '$', right: '$', display: false }},
-                        {{ left: '\\[', right: '\\]', display: true }},
-                        {{ left: '\\(', right: '\\)', display: false }}
-                    ],
-                    throwOnError: false
-                }});
+                setStatus('rendering', 'Rendering math...');
+                try {{
+                    renderMathInElement(mdBody, {{
+                        delimiters: [
+                            {{ left: '$$', right: '$$', display: true }},
+                            {{ left: '$', right: '$', display: false }},
+                            {{ left: '\\[', right: '\\]', display: true }},
+                            {{ left: '\\(', right: '\\)', display: false }}
+                        ],
+                        throwOnError: false
+                    }});
+                }} catch(e) {{
+                    console.error('KaTeX error:', e);
+                }}
             }}
 
-            // ── Mermaid Diagram Rendering ──
-            if (typeof mermaid !== 'undefined') {{
+            // 2. Mermaid Rendering
+            const mermaidBlocks = mdBody.querySelectorAll('pre code.language-mermaid, pre.mermaid');
+            if (mermaidBlocks.length > 0 && typeof mermaid !== 'undefined') {{
+                setStatus('rendering', `Rendering diagrams (${{mermaidBlocks.length}})...`);
                 const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
                 mermaid.initialize({{
                     startOnLoad: false,
                     theme: isDark ? 'dark' : 'default',
                     securityLevel: 'loose'
                 }});
-                document.querySelectorAll('pre code.language-mermaid, pre.mermaid').forEach(el => {{
+                for (const el of mermaidBlocks) {{
                     const pre = el.tagName === 'PRE' ? el : el.parentElement;
                     const div = document.createElement('div');
                     div.className = 'mermaid';
                     div.textContent = el.textContent;
                     pre.replaceWith(div);
-                }});
-                mermaid.run();
+                }}
+                try {{
+                    await mermaid.run();
+                }} catch(e) {{
+                    console.error('Mermaid render error:', e);
+                }}
             }}
 
-            // ── Highlight.js Syntax Highlighting & Copy Button ──
+            // 3. Highlight.js
             if (typeof hljs !== 'undefined') {{
-                document.querySelectorAll('pre code:not(.language-mermaid)').forEach(block => {{
+                mdBody.querySelectorAll('pre code:not(.language-mermaid)').forEach(block => {{
                     hljs.highlightElement(block);
                     const pre = block.parentElement;
                     if (!pre.querySelector('.copy-btn')) {{
@@ -833,9 +932,102 @@ pub fn build_page_html(
                     }}
                 }});
             }}
+
+            setStatus('', 'Live');
+        }}
+
+        // ── Fast Client-Side Navigation (SPA-style without blank page flash) ──
+        async function navigateTo(url, pushState = true) {{
+            startProgressBar();
+            const filename = url.split('/').pop().split('#')[0] || 'page';
+            setStatus('loading', 'Loading: ' + decodeURIComponent(filename) + '...');
+            const wrapper = document.querySelector('.markdown-wrapper');
+            if (wrapper) wrapper.classList.add('loading');
+
+            try {{
+                const response = await fetch(url);
+                if (!response.ok) {{
+                    window.location.href = url;
+                    return;
+                }}
+                const html = await response.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+
+                const newBody = doc.getElementById('markdown-body');
+                const newRaw = doc.getElementById('raw-view');
+                const newBreadcrumb = doc.querySelector('.breadcrumb strong');
+                const currentBreadcrumb = document.querySelector('.breadcrumb strong');
+
+                if (newBody && document.getElementById('markdown-body')) {{
+                    document.getElementById('markdown-body').innerHTML = newBody.innerHTML;
+                }}
+                if (newRaw && document.getElementById('raw-view')) {{
+                    document.getElementById('raw-view').value = newRaw.value;
+                }}
+                if (newBreadcrumb && currentBreadcrumb) {{
+                    currentBreadcrumb.textContent = newBreadcrumb.textContent;
+                }}
+                document.title = doc.title;
+
+                if (pushState) {{
+                    history.pushState(null, '', url);
+                }}
+
+                // Update active state in sidebar
+                const urlPath = new URL(url, window.location.origin).pathname;
+                document.querySelectorAll('.tree-file').forEach(el => {{
+                    const href = el.getAttribute('href');
+                    if (href === urlPath) {{
+                        el.classList.add('active');
+                    }} else {{
+                        el.classList.remove('active');
+                    }}
+                }});
+
+                // Scroll to top or anchor
+                const hash = window.location.hash;
+                const scrollArea = document.querySelector('.content-scroll');
+                if (hash) {{
+                    const target = document.querySelector(hash);
+                    if (target) {{
+                        target.scrollIntoView();
+                    }}
+                }} else if (scrollArea) {{
+                    scrollArea.scrollTop = 0;
+                }}
+
+                await renderRichContent();
+            }} catch (err) {{
+                console.error('Navigation error:', err);
+                window.location.href = url;
+            }} finally {{
+                if (wrapper) wrapper.classList.remove('loading');
+                finishProgressBar();
+            }}
+        }}
+
+        // Intercept sidebar file links and internal markdown links for instant transitions
+        document.addEventListener('click', (e) => {{
+            const link = e.target.closest('a');
+            if (!link) return;
+            const href = link.getAttribute('href');
+            if (href && (href.startsWith('/view/') || href === '/')) {{
+                e.preventDefault();
+                navigateTo(href);
+            }}
         }});
 
-        // ── Filter Files ──
+        window.addEventListener('popstate', () => {{
+            navigateTo(window.location.href, false);
+        }});
+
+        // Initial render on page load
+        document.addEventListener('DOMContentLoaded', () => {{
+            renderRichContent();
+        }});
+
+        // ── Filter Files in Sidebar ──
         const filterInput = document.getElementById('filter-input');
         if (filterInput) {{
             filterInput.addEventListener('input', (e) => {{
@@ -897,7 +1089,7 @@ pub fn build_page_html(
         const evtSource = new EventSource('/api/events');
         evtSource.onmessage = function(e) {{
             if (e.data === 'reload') {{
-                location.reload();
+                navigateTo(window.location.href, false);
             }}
         }};
     </script>

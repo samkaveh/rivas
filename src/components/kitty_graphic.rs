@@ -29,6 +29,12 @@ pub struct KittyGraphic {
     pub error: Option<String>,
 }
 
+impl KittyGraphic {
+    pub fn is_loading(&self) -> bool {
+        self.cols == 0 && self.rows == 0 && self.error.is_none()
+    }
+}
+
 /// Shared implementation behind every Kitty-graphics component (`KittyImage`,
 /// `KittyMath`, `KittyMermaid`): acquires/releases the terminal graphic when
 /// its key changes, polls the manager for dimensions and errors, places or
