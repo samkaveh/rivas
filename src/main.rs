@@ -44,6 +44,7 @@ fn switch_file(old_path: &PathBuf, new_path: &PathBuf, content: &str) -> anyhow:
 #[derive(Parser)]
 #[command(
     name = "rivas",
+    version,
     about = "Terminal markdown viewer and editor with pixel perfect rendering"
 )]
 struct Cli {
