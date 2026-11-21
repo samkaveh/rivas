@@ -34,8 +34,10 @@ const SECTIONS: &[Section] = &[
     Section {
         title: "Files",
         keys: &[
-            ("\\", "toggle file tree"),
-            ("Ctrl-p", "find file"),
+            ("Space", "menu of all actions"),
+            ("\\", "explorer show / focus"),
+            ("^h  ^l", "focus explorer / doc"),
+            ("^p", "find file"),
             (":w", "save"),
             (":q  :wq", "quit / save and quit"),
         ],

@@ -15,14 +15,15 @@ protocol.
 - Footnotes with numeric or named labels.
 - Tables with Markdown alignment markers.
 - Six built-in color themes, switchable at runtime with `Ctrl+T`.
-- Folder browsing: open entire folders (`rivas .` or `rivas folder/`) with an integrated sidebar file tree (`\`).
+- Folder browsing: open entire folders (`rivas .` or `rivas folder/`) with a file explorer that works as its own pane (`\` or `Space e`, `Ctrl-h`/`Ctrl-l` to switch focus).
 - Browser preview server with live reload: browse and view rendered Markdown in your web browser with KaTeX math, Mermaid diagrams, and instant hot-reload on save (`rivas serve` or `:serve`).
 - Local raster images (Kitty graphics or text fallback).
 - Mermaid diagrams rendered to PNG (Kitty graphics or text fallback).
 - LaTeX-style math with two rendering modes:
   - **Unicode** (default): renders formulas as Unicode glyphs, works in any terminal.
   - **Image**: rasterizes via the Kitty graphics protocol for pixel-perfect layout.
-- Vim-style source editing with a side-by-side live preview.
+- Vim-style editing in place: the block under the cursor switches to its highlighted Markdown source, everything else stays rendered.
+- A LazyVim-style `Space` menu that lists every action, so nothing has to be memorized.
 - Vim-style keyboard navigation in the rendered viewer.
 
 ![demo of rivas features](./rivas_demo_short.gif)
@@ -36,15 +37,15 @@ rendering. Supported terminals:
 - WezTerm
 - Ghostty
 
-On other terminals, Rivas runs with text fallbacks: images show as
-`[Image: alt]`, mermaid diagrams show as `[Mermaid diagram]` with source code,
-and math uses Unicode glyphs.
+On other terminals, Rivas runs with text fallbacks: images show their alt
+text (`▣ alt`), Mermaid diagrams show their source as a code block, and math
+uses Unicode glyphs.
 
 ## 🚀 Installation and Usage
 
 ### 🪟 Windows
 
-1. Download the `rivas-x86_64-pc-windows-msvc.zip` from the Assets in releases.
+1. Download `rivas-x86_64-pc-windows-msvc.zip` from the assets of the [latest release](https://github.com/samkaveh/rivas/releases/latest).
 2. Extract the `.exe` file to a folder of your choice.
 3. (Optional) Add the folder to your **System PATH** to run `rivas` from any terminal.
 
@@ -54,8 +55,10 @@ Note: Only works with nightly WezTerm on windows (since other versions do not ha
 
 **Via Binary:**
 
-1. Download `rivas-x86_64-apple-darwin.tar.gz` from assets in releases.
-2. Extract the file: `rivas-x86_64-apple-darwin.tar.gz`.
+1. Download from the assets of the [latest release](https://github.com/samkaveh/rivas/releases/latest):
+   `rivas-aarch64-apple-darwin.tar.gz` for Apple Silicon (M1 and later) or
+   `rivas-x86_64-apple-darwin.tar.gz` for Intel Macs.
+2. Extract it: `tar -xzf rivas-*-apple-darwin.tar.gz`.
 3. Move it to your bin folder: `sudo mv rivas /usr/local/bin/`.
 4. **Note:** If macOS blocks the app, go to *System Settings > Privacy & Security* and click "Allow Anyway."
 
@@ -63,7 +66,7 @@ Note: Only works with nightly WezTerm on windows (since other versions do not ha
 
 ```bash
 # Download the binary
-curl -LO https://github.com/hessikaveh/rivas/releases/download/v0.4.2/rivas-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/samkaveh/rivas/releases/latest/download/rivas-x86_64-unknown-linux-gnu.tar.gz
 
 # Extract and install
 tar -xzf rivas-x86_64-unknown-linux-gnu.tar.gz
@@ -84,7 +87,36 @@ where the rendered block was; a colored marker in the left margin shows the
 block you are on and your mode (blue Normal, green Insert, purple Visual).
 Press `i` to type, `Esc` to return to Normal mode, and `:w` to save.
 
-Press `F1` (or type `:help`) for a keyboard reference.
+### The Space menu
+
+Press `Space` in Normal mode to open a menu of everything you can do next,
+in the style of LazyVim's which-key. Keys either run an action or open a
+group; `Backspace` goes back a level and `Esc` closes the menu.
+
+| Keys | Action |
+|---|---|
+| `Space Space` | Find file |
+| `Space e` | Explorer: show, focus or hide |
+| `Space /` | Search the document |
+| `Space w` | Save |
+| `Space f …` | File: `f` find, `e` explorer, `w` save, `b` open in browser |
+| `Space u …` | UI: `t` next theme, `m` math mode, `+` / `-` graphics size |
+| `Space q …` | Quit: `q` quit, `w` save and quit, `!` quit without saving |
+| `Space ?` | Full keyboard reference (also `F1` or `:help`) |
+
+### Explorer
+
+`\` or `Space e` opens the file explorer and moves the keyboard into it.
+The explorer and the document are separate panes, like editor windows: only
+the focused one receives keys, and the status line shows `EXPLORER` while the
+explorer has focus.
+
+- `Ctrl-h` / `Ctrl-l` move focus to the explorer / document; `Tab` switches.
+- In the explorer: `j`/`k` move, `l` or `Enter` opens (focus returns to the
+  document), `h` collapses or jumps to the parent, `/` filters the whole
+  workspace, `Esc` goes back to the document, `q` closes the explorer.
+- Pressing `\` again from the document refocuses the explorer; from the
+  explorer it hides it.
 
 ## CLI Options
 
@@ -117,10 +149,11 @@ rivas /path/to/notes
 
 Running `rivas` with no arguments in a terminal will automatically open the current directory.
 
-- Rivas opens with the sidebar file tree visible on the left.
+- Rivas opens with the explorer visible on the left and focused.
 - If a `README.md` or `index.md` exists in the folder, it is displayed immediately.
-- Use `↑`/`↓` (or `j`/`k`) to navigate files, `Enter` to open or toggle folders, and `\` to toggle the sidebar at any time.
-- Press `/` in the sidebar to search every file in the workspace by path, including inside collapsed folders.
+- Use `↑`/`↓` (or `j`/`k`) to navigate files and `Enter` to open a file or toggle a folder; opening a file moves focus to the document.
+- `Ctrl-h` / `Ctrl-l` (or `Tab`) move between the explorer and the document; see [Explorer](#explorer).
+- Press `/` in the explorer to search every file in the workspace by path, including inside collapsed folders.
 
 ### 🌐 Serving in the Browser
 
@@ -168,7 +201,7 @@ Select one at startup:
 rivas --theme dracula document.md
 ```
 
-Or cycle through all themes at runtime with `Ctrl+T`; the new theme's name is
+Or cycle through all themes at runtime with `Ctrl+T` (or `Space u t`); the new theme's name is
 shown briefly in the status line. Syntax highlighting, math images, and Mermaid
 diagrams all follow the active theme.
 
@@ -206,11 +239,8 @@ automatic cell-size detection is wrong for your display, you can resize
 graphics two ways:
 
 - **At runtime** — in Normal/Visual mode press `[` to shrink or `]` to enlarge
-  every image, diagram, and formula, and see the result immediately:
-
-  ```
-  :q Quit | C-p Find | j/k Scroll | gg/G Top/Bottom | :math Math mode | C-t Themes | 🔍 [ ]
-  ```
+  every image, diagram, and formula (or `Space u -` / `Space u +`), and see the
+  result immediately.
 
 - **From the CLI** — pin the cell size explicitly with `--cell-width` /
   `--cell-height` (see the table above). This also changes the rasterization
