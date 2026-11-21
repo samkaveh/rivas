@@ -16,6 +16,7 @@ mod server;
 mod theme;
 
 use crate::components::document::Document;
+use crate::components::leader::LeaderAction;
 use crate::lib_file_cache::FileListCache;
 use skim::prelude::{Skim, SkimItemReader, SkimOptionsBuilder};
 use std::sync::{Arc, Mutex};
@@ -435,6 +436,31 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         })
     };
 
+    // Leader-menu actions that live at the app level.
+    let on_app_action = {
+        let should_exit = should_exit.clone();
+        let status_msg = status_msg.clone();
+        let action = props.action.clone();
+        hooks.use_async_handler(move |a: LeaderAction| {
+            let mut should_exit = should_exit.clone();
+            let mut status_msg = status_msg.clone();
+            let action = action.clone();
+            async move {
+                match a {
+                    LeaderAction::FindFile => {
+                        *action.lock().unwrap() = AppAction::SearchFile;
+                        should_exit.set(true);
+                    }
+                    LeaderAction::NextTheme => {
+                        theme::cycle();
+                        status_msg.set(Some((true, format!("Theme: {}", theme::current().name))));
+                    }
+                    _ => {}
+                }
+            }
+        })
+    };
+
     // `render_tick` is read so the status line re-renders while graphics load.
     let _t = render_tick.get();
     let pending_graphics = graphics_manager::pending_graphics_count();
@@ -456,6 +482,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 on_change,
                 on_quit,
                 on_open_file,
+                on_app_action,
                 notice: status_msg.read().clone(),
                 pending_graphics,
             )

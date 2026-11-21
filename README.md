@@ -84,7 +84,36 @@ where the rendered block was; a colored marker in the left margin shows the
 block you are on and your mode (blue Normal, green Insert, purple Visual).
 Press `i` to type, `Esc` to return to Normal mode, and `:w` to save.
 
-Press `F1` (or type `:help`) for a keyboard reference.
+### The Space menu
+
+Press `Space` in Normal mode to open a menu of everything you can do next,
+in the style of LazyVim's which-key. Keys either run an action or open a
+group; `Backspace` goes back a level and `Esc` closes the menu.
+
+| Keys | Action |
+|---|---|
+| `Space Space` | Find file |
+| `Space e` | Explorer: show, focus or hide |
+| `Space /` | Search the document |
+| `Space w` | Save |
+| `Space f …` | File: `f` find, `e` explorer, `w` save, `b` open in browser |
+| `Space u …` | UI: `t` next theme, `m` math mode, `+` / `-` graphics size |
+| `Space q …` | Quit: `q` quit, `w` save and quit, `!` quit without saving |
+| `Space ?` | Full keyboard reference (also `F1` or `:help`) |
+
+### Explorer
+
+`\` or `Space e` opens the file explorer and moves the keyboard into it.
+The explorer and the document are separate panes, like editor windows: only
+the focused one receives keys, and the status line shows `EXPLORER` while the
+explorer has focus.
+
+- `Ctrl-h` / `Ctrl-l` move focus to the explorer / document; `Tab` switches.
+- In the explorer: `j`/`k` move, `l` or `Enter` opens (focus returns to the
+  document), `h` collapses or jumps to the parent, `/` filters the whole
+  workspace, `Esc` goes back to the document, `q` closes the explorer.
+- Pressing `\` again from the document refocuses the explorer; from the
+  explorer it hides it.
 
 ## CLI Options
 

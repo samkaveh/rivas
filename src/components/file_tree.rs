@@ -195,6 +195,8 @@ pub struct FileTreePanelProps {
     pub is_searching: bool,
     /// Panel height in rows (used to keep the selection scrolled into view).
     pub height: u32,
+    /// Whether the explorer has keyboard focus (vs. the document).
+    pub focused: bool,
 }
 
 /// Collapsible left-side file explorer: folder tree with ▸/▾ indicators and a
@@ -220,12 +222,14 @@ pub fn FileTreePanel(props: &FileTreePanelProps) -> impl Into<AnyElement<'static
     let inner = props.width.saturating_sub(2) as usize;
 
     let root_name = props.visible.first().map(|n| n.name.clone()).unwrap_or_default();
-    let footer: Vec<(String, String)> = if props.is_searching {
+    let footer: Vec<(String, String)> = if !props.focused {
+        vec![("^h".into(), "focus explorer".into())]
+    } else if props.is_searching {
         vec![("esc".into(), "cancel".into()), ("↵".into(), "done".into())]
     } else if !props.search_query.is_empty() {
         vec![("esc".into(), "clear".into()), ("↵".into(), "open".into()), ("\\".into(), "hide".into())]
     } else {
-        vec![("↵".into(), "open".into()), ("/".into(), "filter".into()), ("\\".into(), "hide".into())]
+        vec![("↵".into(), "open".into()), ("/".into(), "filter".into()), ("esc".into(), "back".into())]
     };
 
     element! {
@@ -252,7 +256,12 @@ pub fn FileTreePanel(props: &FileTreePanelProps) -> impl Into<AnyElement<'static
                     }.into_any()
                 } else {
                     element! {
-                        Text(content: root_name.to_uppercase(), color: theme::muted(), weight: Weight::Bold, wrap: TextWrap::NoWrap)
+                        Text(
+                            content: root_name.to_uppercase(),
+                            color: if props.focused { theme::blue() } else { theme::muted() },
+                            weight: Weight::Bold,
+                            wrap: TextWrap::NoWrap,
+                        )
                     }.into_any()
                 })
             }
@@ -292,8 +301,10 @@ pub fn FileTreePanel(props: &FileTreePanelProps) -> impl Into<AnyElement<'static
                         node.name.clone()
                     };
                     element! {
-                        View(height: 1, flex_direction: FlexDirection::Row, background_color: selected.then(theme::surface)) {
-                            Text(content: if selected { "▌" } else { " " }, color: theme::blue())
+                        // The selection bar is bright only while the
+                        // explorer has focus, so it's clear where keys go.
+                        View(height: 1, flex_direction: FlexDirection::Row, background_color: (selected && props.focused).then(theme::surface)) {
+                            Text(content: if selected { "▌" } else { " " }, color: if props.focused { theme::blue() } else { theme::dark_grey() })
                             Text(content: format!(" {indent}"))
                             Text(content: icon, color: theme::muted())
                             Text(

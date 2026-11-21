@@ -5,6 +5,7 @@ use iocraft::prelude::*;
 use crate::components::blocks_renderer::BlocksRenderer;
 use crate::components::editor::{Buffer, EditorState, Mode, handle_key};
 use crate::components::help::HelpOverlay;
+use crate::components::leader::{self, LeaderAction, LeaderMenu, Step};
 use crate::components::file_tree::{FileNode, FileTreePanel, tree_rows};
 use crate::components::scroll::{
     ScrollDelta, ScrollIntent, Viewport, intent_from_key, scroll_delta,
@@ -45,6 +46,8 @@ pub struct DocumentProps {
     pub on_quit: Handler<()>,
     /// Callback fired when a file is selected in the sidebar file tree.
     pub on_open_file: Option<Handler<PathBuf>>,
+    /// Callback for leader actions the app handles (find file, next theme).
+    pub on_app_action: Option<Handler<LeaderAction>>,
     /// Transient app-level notice for the status line: `(ok, text)`.
     pub notice: Option<(bool, String)>,
     /// Number of images/diagrams/formulas still rendering in the background.
@@ -176,9 +179,21 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             None
         }
     });
-    let mut tree_selected = hooks.use_state(|| 0usize);
+    // Start the selection on the open file when the tree opens at launch.
+    let mut tree_selected = hooks.use_state(|| {
+        let file = std::fs::canonicalize(&props.file_path).unwrap_or_else(|_| props.file_path.clone());
+        tree_root
+            .read()
+            .as_ref()
+            .and_then(|root| tree_rows(root, "").iter().position(|n| n.path == file))
+            .unwrap_or(0)
+    });
     // Keyboard reference overlay (F1 / `:help`).
     let show_help = hooks.use_state(|| false);
+    // Whether the explorer (rather than the document) receives keys.
+    let tree_focus = hooks.use_state(|| props.initial_show_tree.unwrap_or(false));
+    // Keys typed after Space while the leader menu is open.
+    let leader = hooks.use_state(|| None::<Vec<char>>);
     // Search filter string typed with `/` while tree is open.
     let tree_search = hooks.use_state(|| String::new());
     // Whether the tree is in search-input mode (after pressing `/`).
@@ -261,6 +276,11 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         let mut tree_search = tree_search.clone();
         let mut tree_searching = tree_searching.clone();
         let mut show_help = show_help.clone();
+        let mut tree_focus = tree_focus.clone();
+        let mut leader = leader.clone();
+        let on_app_action = props.on_app_action.clone();
+        // Tree paths are canonical; match the open file the same way.
+        let current_file = std::fs::canonicalize(&props.file_path).unwrap_or_else(|_| props.file_path.clone());
         let search_cache = search_cache.clone();
         let on_open_file = on_open_file.clone();
         // Tree root = the workspace or directory rivas was launched from.
@@ -300,184 +320,276 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 return;
             }
 
-            // ── File tree sidebar ──────────────────────────────────────────
-            // `\` toggles the panel (Normal/Visual only). While open, the
-            // arrow keys + Enter drive the tree; scrolling keys stay free.
-            let mode_before_tree: Mode = editor_state
-                .read()
-                .as_ref()
-                .map(|s| s.mode.clone())
-                .unwrap_or(Mode::Normal);
-            let editing = matches!(
-                mode_before_tree,
-                Mode::Insert | Mode::Command | Mode::Search { .. }
-            );
-            if !editing && code == KeyCode::Char('\\') && !ctrl {
-                let opening = !show_tree.get();
-                if opening && tree_root.read().is_none() {
-                    // Root = directory of the currently open file.
-                    let dir = tree_base_dir
-                        .clone()
-                        .unwrap_or_else(|| std::path::PathBuf::from("."));
-                    *tree_root.write() = FileNode::from_dir(&dir);
+            // An action chosen from the leader menu or a direct shortcut; run
+            // by the single dispatcher below.
+            let mut action: Option<LeaderAction> = None;
+
+            // ── Leader menu (Space) ────────────────────────────────────────
+            let leader_path = leader.read().clone();
+            if let Some(mut path) = leader_path {
+                match code {
+                    KeyCode::Backspace if !path.is_empty() => {
+                        path.pop();
+                        leader.set(Some(path));
+                    }
+                    KeyCode::Char(c) if !ctrl => match leader::step(&path, c) {
+                        Step::Descend => {
+                            path.push(c);
+                            leader.set(Some(path));
+                        }
+                        Step::Run(a) => {
+                            leader.set(None);
+                            action = Some(a);
+                        }
+                        Step::Unbound => leader.set(None),
+                    },
+                    _ => leader.set(None),
                 }
-                show_tree.set(opening);
-                tree_selected.set(0);
                 tick.set(tick.get().wrapping_add(1));
+                if action.is_none() {
+                    return;
+                }
+            }
+
+            let editor_idle = editor_state.read().as_ref().map_or(true, |s| {
+                s.mode == Mode::Normal
+                    && s.operator.is_none()
+                    && s.pending.is_none()
+                    && s.count_buf.is_empty()
+            }) && !pending_g.get();
+            let tree_open = show_tree.get();
+            let tree_has_focus = tree_open && tree_focus.get();
+
+            if action.is_none() && !ctrl && !tree_searching.get() {
+                if code == KeyCode::Char(' ') && (editor_idle || tree_has_focus) {
+                    leader.set(Some(Vec::new()));
+                    tick.set(tick.get().wrapping_add(1));
+                    return;
+                }
+                // `\` shows the explorer, focuses it, or hides it.
+                if code == KeyCode::Char('\\') && (editor_idle || tree_has_focus) {
+                    action = Some(LeaderAction::Explorer);
+                }
+            }
+
+            // ── Pane focus: explorer ⇄ document ────────────────────────────
+            // Ctrl-h / Ctrl-l move left / right like window navigation in
+            // Vim; Tab flips between the two. Many terminals send Ctrl-h as
+            // Backspace, so Backspace in an idle document also moves left.
+            if action.is_none() && tree_open && !tree_searching.get() {
+                let to_tree = !tree_has_focus
+                    && ((ctrl && code == KeyCode::Char('h'))
+                        || (editor_idle && matches!(code, KeyCode::Tab | KeyCode::Backspace)));
+                let to_doc = tree_has_focus
+                    && ((ctrl && code == KeyCode::Char('l')) || code == KeyCode::Tab);
+                if to_tree || to_doc {
+                    tree_focus.set(to_tree);
+                    tick.set(tick.get().wrapping_add(1));
+                    return;
+                }
+            }
+
+            // ── Action dispatcher ──────────────────────────────────────────
+            if let Some(action) = action {
+                let editor_cmd = |cmd: &str, editor_state: &mut Ref<Option<EditorState>>| -> bool {
+                    let mut quit = false;
+                    if let Some(s) = editor_state.write().as_mut() {
+                        s.cmd_buf = cmd.to_string();
+                        quit = s.execute_command();
+                        s.needs_rerender = false;
+                    }
+                    quit
+                };
+                let mut quit = false;
+                match action {
+                    LeaderAction::Explorer => {
+                        if !show_tree.get() {
+                            if tree_root.read().is_none() {
+                                let dir = tree_base_dir
+                                    .clone()
+                                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                                *tree_root.write() = FileNode::from_dir(&dir);
+                            }
+                            // Start on the open file when it's visible.
+                            let rows = tree_root
+                                .read()
+                                .as_ref()
+                                .map(|root| tree_rows(root, ""))
+                                .unwrap_or_default();
+                            let here = rows.iter().position(|n| n.path == current_file).unwrap_or(0);
+                            tree_selected.set(here);
+                            show_tree.set(true);
+                            tree_focus.set(true);
+                        } else if tree_focus.get() {
+                            show_tree.set(false);
+                            tree_focus.set(false);
+                            tree_search.set(String::new());
+                            tree_searching.set(false);
+                        } else {
+                            tree_focus.set(true);
+                        }
+                    }
+                    LeaderAction::FindFile | LeaderAction::NextTheme => {
+                        if let Some(handler) = &on_app_action {
+                            handler(action);
+                        }
+                    }
+                    LeaderAction::Search => {
+                        tree_focus.set(false);
+                        if let Some(s) = editor_state.write().as_mut() {
+                            s.mode = Mode::Normal;
+                            handle_key(s, KeyCode::Char('/'), false);
+                        }
+                    }
+                    LeaderAction::Save => quit = editor_cmd("w", &mut editor_state),
+                    LeaderAction::Quit => quit = editor_cmd("q", &mut editor_state),
+                    LeaderAction::SaveQuit => quit = editor_cmd("wq", &mut editor_state),
+                    LeaderAction::ForceQuit => quit = editor_cmd("q!", &mut editor_state),
+                    LeaderAction::ToggleMath => quit = editor_cmd("math", &mut editor_state),
+                    LeaderAction::Serve => quit = editor_cmd("serve", &mut editor_state),
+                    LeaderAction::GrowGraphics => adjust_graphics(0.25),
+                    LeaderAction::ShrinkGraphics => adjust_graphics(-0.25),
+                    LeaderAction::Keymaps => show_help.set(true),
+                }
+                tick.set(tick.get().wrapping_add(1));
+                if quit {
+                    on_quit(());
+                }
                 return;
             }
-            if show_tree.get() {
+
+            // ── File tree (when it has focus) ──────────────────────────────
+            // The explorer owns the keyboard while focused; only the command
+            // line (`:`) and Ctrl shortcuts reach the document.
+            if tree_has_focus && !(code == KeyCode::Char(':') && !tree_searching.get()) && !(ctrl && !tree_searching.get()) {
                 // ── Search mode: type characters to filter ─────────────────
                 if tree_searching.get() {
                     match code {
                         KeyCode::Esc => {
                             tree_searching.set(false);
                             tree_search.set(String::new());
-                            tick.set(tick.get().wrapping_add(1));
                         }
-                        KeyCode::Enter => {
-                            tree_searching.set(false);
-                            tick.set(tick.get().wrapping_add(1));
-                        }
+                        KeyCode::Enter => tree_searching.set(false),
                         KeyCode::Backspace => {
                             let mut s = tree_search.read().clone();
                             s.pop();
                             tree_search.set(s);
                             tree_selected.set(0);
-                            tick.set(tick.get().wrapping_add(1));
                         }
                         KeyCode::Char(c) => {
                             let mut s = tree_search.read().clone();
                             s.push(c);
                             tree_search.set(s);
                             tree_selected.set(0);
-                            tick.set(tick.get().wrapping_add(1));
-                        }
-                        _ => {}
-                    }
-                    return;
-                }
-
-                // Tree-specific keys captured here; everything else falls
-                // through to normal document handling.
-                let handled = matches!(
-                    code,
-                    KeyCode::Up
-                        | KeyCode::Down
-                        | KeyCode::Left
-                        | KeyCode::Right
-                        | KeyCode::Enter
-                        | KeyCode::Char('q')
-                        | KeyCode::Char('j')
-                        | KeyCode::Char('k')
-                        | KeyCode::Char('h')
-                        | KeyCode::Char('l')
-                        | KeyCode::Char('/')
-                        | KeyCode::Esc
-                );
-                if !handled {
-                    // fall through
-                } else {
-                    // Freshly recompute the visible rows so selection/expansion
-                    // always operate on the current tree, not a stale snapshot.
-                    let search_q = tree_search.read().clone();
-                    let visible: Vec<(PathBuf, bool, bool)> = {
-                        // (path, is_dir, expanded)
-                        let guard = tree_root.read();
-                        match guard.as_ref() {
-                            Some(root) => cached_tree_rows(root, &search_q, search_cache.clone())
-                                .into_iter()
-                                .map(|n| (n.path, n.is_dir, n.expanded))
-                                .collect(),
-                            None => Vec::new(),
-                        }
-                    };
-                    let max = visible.len().saturating_sub(1);
-                    let mut toggle_selected = || {
-                        if let Some((target, _, _)) = visible.get(tree_selected.get()) {
-                            let target = target.clone();
-                            if let Some(root) = tree_root.write().as_mut() {
-                                FileNode::toggle(root, &target);
-                            }
-                        }
-                    };
-                    match code {
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            tree_selected.set(tree_selected.get().saturating_sub(1).min(max));
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            tree_selected.set((tree_selected.get() + 1).min(max));
-                        }
-                        // Enter: toggle dirs, open files.
-                        KeyCode::Enter => {
-                            if let Some(node) = visible.get(tree_selected.get()).cloned() {
-                                if node.1 {
-                                    toggle_selected();
-                                } else if let Some(handler) = &on_open_file {
-                                    handler(node.0.clone());
-                                }
-                            }
-                        }
-                        // Right / l: expand only.
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            let collapsible = visible
-                                .get(tree_selected.get())
-                                .map_or(false, |(_, is_dir, expanded)| *is_dir && !*expanded);
-                            if collapsible {
-                                toggle_selected();
-                            } else if let Some((path, false, _)) = visible.get(tree_selected.get()) {
-                                // Open the file on `l` / Right too.
-                                if let Some(handler) = &on_open_file {
-                                    handler(path.clone());
-                                }
-                            }
-                        }
-                        // Left / h: collapse expanded dir, or jump to parent.
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            let expanded_dir = visible
-                                .get(tree_selected.get())
-                                .map_or(false, |(_, is_dir, expanded)| *is_dir && *expanded);
-                            if expanded_dir {
-                                toggle_selected();
-                            } else {
-                                // netrw-style: jump to parent dir.
-                                if let Some((path, _, _)) = visible.get(tree_selected.get()) {
-                                    if let Some(parent) = path.parent() {
-                                        for (i, node) in visible.iter().enumerate() {
-                                            if node.0 == *parent {
-                                                tree_selected.set(i);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // `/` starts search mode.
-                        KeyCode::Char('/') => {
-                            tree_searching.set(true);
-                            tree_search.set(String::new());
-                            tree_selected.set(0);
-                        }
-                        // `Esc` clears search if active, otherwise closes tree.
-                        KeyCode::Esc => {
-                            if !tree_search.read().is_empty() {
-                                tree_search.set(String::new());
-                                tree_selected.set(0);
-                            } else {
-                                show_tree.set(false);
-                            }
-                        }
-                        KeyCode::Char('q') => {
-                            show_tree.set(false);
-                            tree_search.set(String::new());
-                            tree_searching.set(false);
                         }
                         _ => {}
                     }
                     tick.set(tick.get().wrapping_add(1));
                     return;
                 }
+
+                // Freshly recompute the visible rows so selection/expansion
+                // always operate on the current tree, not a stale snapshot.
+                let search_q = tree_search.read().clone();
+                let visible: Vec<(PathBuf, bool, bool)> = {
+                    // (path, is_dir, expanded)
+                    let guard = tree_root.read();
+                    match guard.as_ref() {
+                        Some(root) => cached_tree_rows(root, &search_q, search_cache.clone())
+                            .into_iter()
+                            .map(|n| (n.path, n.is_dir, n.expanded))
+                            .collect(),
+                        None => Vec::new(),
+                    }
+                };
+                let max = visible.len().saturating_sub(1);
+                let mut toggle_selected = || {
+                    if let Some((target, _, _)) = visible.get(tree_selected.get()) {
+                        let target = target.clone();
+                        if let Some(root) = tree_root.write().as_mut() {
+                            FileNode::toggle(root, &target);
+                        }
+                    }
+                };
+                let page = (vh.unwrap_or(24) as usize / 2).max(1);
+                let mut open = |path: &PathBuf| {
+                    if let Some(handler) = &on_open_file {
+                        handler(path.clone());
+                    }
+                    // Like opening a file from an explorer in an editor: the
+                    // document takes focus; the explorer stays open.
+                    tree_focus.set(false);
+                };
+                match code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        tree_selected.set(tree_selected.get().saturating_sub(1).min(max));
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        tree_selected.set((tree_selected.get() + 1).min(max));
+                    }
+                    KeyCode::Char('g') | KeyCode::Home => tree_selected.set(0),
+                    KeyCode::Char('G') | KeyCode::End => tree_selected.set(max),
+                    KeyCode::PageDown => tree_selected.set((tree_selected.get() + page).min(max)),
+                    KeyCode::PageUp => tree_selected.set(tree_selected.get().saturating_sub(page)),
+                    // Enter: toggle dirs, open files.
+                    KeyCode::Enter => {
+                        if let Some(node) = visible.get(tree_selected.get()).cloned() {
+                            if node.1 {
+                                toggle_selected();
+                            } else {
+                                open(&node.0);
+                            }
+                        }
+                    }
+                    // Right / l: expand a folder, or open a file.
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        let collapsed_dir = visible
+                            .get(tree_selected.get())
+                            .map_or(false, |(_, is_dir, expanded)| *is_dir && !*expanded);
+                        if collapsed_dir {
+                            toggle_selected();
+                        } else if let Some((path, false, _)) = visible.get(tree_selected.get()) {
+                            open(path);
+                        }
+                    }
+                    // Left / h: collapse expanded dir, or jump to parent.
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        let expanded_dir = visible
+                            .get(tree_selected.get())
+                            .map_or(false, |(_, is_dir, expanded)| *is_dir && *expanded);
+                        if expanded_dir {
+                            toggle_selected();
+                        } else if let Some((path, _, _)) = visible.get(tree_selected.get()) {
+                            if let Some(parent) = path.parent() {
+                                if let Some(i) = visible.iter().position(|n| n.0 == *parent) {
+                                    tree_selected.set(i);
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('/') => {
+                        tree_searching.set(true);
+                        tree_search.set(String::new());
+                        tree_selected.set(0);
+                    }
+                    // Esc clears the filter, then hands focus back.
+                    KeyCode::Esc => {
+                        if !tree_search.read().is_empty() {
+                            tree_search.set(String::new());
+                            tree_selected.set(0);
+                        } else {
+                            tree_focus.set(false);
+                        }
+                    }
+                    KeyCode::Char('q') => {
+                        show_tree.set(false);
+                        tree_focus.set(false);
+                        tree_search.set(String::new());
+                    }
+                    _ => {}
+                }
+                tick.set(tick.get().wrapping_add(1));
+                return;
             }
 
             // Handle editing
@@ -545,15 +657,8 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                     _ => None,
                 };
                 if let Some(delta) = delta {
-                    let next = crate::output::capabilities::graphics_scale() + delta;
-                    if crate::output::capabilities::set_graphics_scale(next) {
-                        crate::output::graphics_manager::refresh_graphics();
-                        tick.set(tick.get().wrapping_add(1));
-                        debug::log_event(&debug::DebugEvent::GraphicsScale {
-                            ts: debug::elapsed_ms(),
-                            scale: crate::output::capabilities::graphics_scale(),
-                        });
-                    }
+                    adjust_graphics(delta);
+                    tick.set(tick.get().wrapping_add(1));
                 }
             }
 
@@ -621,7 +726,11 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     let column_vw = Some(col_w + theme::CONTENT_H_INSET);
     let content_vh = vh.map(|h| h.saturating_sub(1));
     // Current file for highlighting in the tree.
-    let current_file_for_tree = props.file_path.clone();
+    let current_file_for_tree = if tree_open {
+        std::fs::canonicalize(&props.file_path).unwrap_or_else(|_| props.file_path.clone())
+    } else {
+        props.file_path.clone()
+    };
     let tree_search_text = tree_search.read().clone();
     let tree_is_searching = tree_searching.get();
 
@@ -642,7 +751,13 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     };
     let _ = &cursor_line_preview;
     let pending = props.pending_graphics;
-    let mode_color = current_mode.color();
+    let explorer_focused = tree_open && tree_focus.get();
+    let (mode_label, mode_color) = if explorer_focused && current_mode == Mode::Normal {
+        ("EXPLORER", theme::cyan())
+    } else {
+        (current_mode.label(), current_mode.color())
+    };
+    let leader_path = leader.read().clone();
     let command_line = match current_mode {
         Mode::Command => Some(format!(":{}", current_cmd)),
         Mode::Search { .. } => Some(current_cmd.clone()),
@@ -661,6 +776,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         current_file: Some(current_file_for_tree.clone()),
                         search_query: tree_search_text.clone(),
                         is_searching: tree_is_searching,
+                        focused: explorer_focused,
                         height: content_vh.unwrap_or(24),
                     )
                 }
@@ -692,7 +808,7 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         // Single status line: mode · file · message ……… progress · position · help
         View(width: 100pct, height: 1, background_color: theme::status_bg(), flex_direction: FlexDirection::Row) {
             View(background_color: mode_color, padding_left: 1, padding_right: 1) {
-                Text(content: current_mode.label(), color: theme::dark_bg(), weight: Weight::Bold)
+                Text(content: mode_label, color: theme::dark_bg(), weight: Weight::Bold)
             }
             #(if let Some(cmd) = command_line {
                 // Command / search entry owns the line, with a visible caret.
@@ -732,14 +848,36 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 Text(content: format!("{position}  {percent}%"), color: theme::muted(), wrap: TextWrap::NoWrap)
             }
             View(padding_right: 1, flex_shrink: 0.0, flex_direction: FlexDirection::Row) {
-                Text(content: "F1", color: theme::fg(), weight: Weight::Bold)
-                Text(content: " help", color: theme::comment())
+                Text(content: "Space", color: theme::fg(), weight: Weight::Bold)
+                Text(content: " menu", color: theme::comment())
             }
         }
+        // Which-key style menu, docked just above the status line.
+        #(leader_path.map(|path| {
+            let w = vw.unwrap_or(100);
+            let h = leader::menu_height(&path, w);
+            element! {
+                View(position: Position::Absolute, left: 0, top: vh.unwrap_or(30).saturating_sub(1 + h) as i32, width: w, height: h) {
+                    LeaderMenu(path: path, width: w)
+                }
+            }.into_any()
+        }))
         #(show_help.get().then(|| element! {
             HelpOverlay(width: vw.unwrap_or(100), height: vh.unwrap_or(30))
         }.into_any()))
     }
+    }
+}
+
+/// Grows (`delta > 0`) or shrinks every image, diagram and formula.
+fn adjust_graphics(delta: f32) {
+    let next = crate::output::capabilities::graphics_scale() + delta;
+    if crate::output::capabilities::set_graphics_scale(next) {
+        crate::output::graphics_manager::refresh_graphics();
+        debug::log_event(&debug::DebugEvent::GraphicsScale {
+            ts: debug::elapsed_ms(),
+            scale: crate::output::capabilities::graphics_scale(),
+        });
     }
 }
 

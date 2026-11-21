@@ -16,6 +16,8 @@ pub mod heading;
 pub mod help;
 /// Shared syntect syntax highlighting for raw buffer views.
 pub mod highlight;
+/// Which-key style `Space` leader menu.
+pub mod leader;
 /// Raw HTML passthrough block rendering.
 pub mod html_block;
 /// Inline image rendering with Kitty/iterm2 protocol support.
