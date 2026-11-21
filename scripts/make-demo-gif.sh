@@ -150,17 +150,33 @@ pause() { sleep "$1"; }
 
 # ── Record ───────────────────────────────────────────────────────────────────
 log "Recording — hands off the keyboard and mouse"
-ffmpeg -hide_banner -loglevel error -y \
-    -f avfoundation -capture_cursor 0 -framerate 30 -i "${SCREEN_IDX}:none" \
+# ffmpeg's chatter (pixel-format notes, objc warnings) goes to a log that is
+# shown only if recording fails; `-progress` reports the live frame count.
+FFLOG="$WORK/ffmpeg.log"
+PROGRESS="$WORK/progress"
+ffmpeg -hide_banner -loglevel warning -nostats -y \
+    -f avfoundation -capture_cursor 0 -pixel_format uyvy422 -framerate 30 \
+    -i "${SCREEN_IDX}:none" \
     -vf "crop=${CW}:${CH}:${CX}:${CY}" \
-    -c:v libx264 -preset ultrafast -crf 12 \
-    "$RAW" </dev/null &
+    -c:v libx264 -preset ultrafast -crf 12 -pix_fmt yuv420p \
+    -progress "$PROGRESS" \
+    "$RAW" </dev/null 2>"$FFLOG" &
 FFMPEG_PID=$!
-for _ in $(seq 25); do
-    [[ -s "$RAW" ]] && break
+
+# Wait for the first captured frames. (The output file itself can't be
+# watched: ffmpeg buffers it, so it stays empty for a while.)
+recording_started() {
+    [[ -f "$PROGRESS" ]] && grep -q '^frame=[1-9]' "$PROGRESS"
+}
+for _ in $(seq 75); do
+    recording_started && break
+    kill -0 "$FFMPEG_PID" 2>/dev/null || break
     sleep 0.2
 done
-[[ -s "$RAW" ]] || die "the screen recording didn't start (Screen Recording permission?)"
+if ! recording_started; then
+    sed 's/^/  ffmpeg: /' "$FFLOG" >&2
+    die "the screen recording didn't start (see the ffmpeg output above)"
+fi
 pause 2
 
 # 1. The rendered document: scroll through headings, lists, code, tables,
