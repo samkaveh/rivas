@@ -519,6 +519,18 @@ fn parse_blocks(events: &[(Event, Range<usize>)], pos: &mut usize) -> Vec<Block>
     let mut blocks = Vec::new();
     while *pos < events.len() {
         match &events[*pos].0 {
+            // Tight list items carry no Paragraph tags, so an item that opens
+            // with styled text (`- **bold** rest`) starts with an inline tag.
+            // Treat it as the start of a stray inline run — otherwise the
+            // styled span and the text after it become separate paragraphs
+            // and render on separate lines.
+            Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. })
+            | Event::FootnoteReference(_) => {
+                let start_offset = events[*pos].1.start;
+                let (inlines, end_offset) =
+                    parse_inlines_with_end(events, pos, Some(StopCondition::OnBlockBoundary));
+                blocks.push(inlines_to_block(inlines, (start_offset, end_offset)));
+            }
             Event::Start(tag) => {
                 let tag_clone = tag.clone();
                 let start_offset = events[*pos].1.start;
@@ -1505,4 +1517,17 @@ $$
             other => panic!("Expected FootnoteDefinition, got: {:?}", other),
         }
     }
+
+    #[test]
+    fn tight_list_item_starting_with_bold_stays_one_paragraph() {
+        let doc = parse_markdown("- **Bold**, then more\n- *it* and [l](x) tail\n");
+        let Block::List { items, .. } = &doc.blocks[0] else {
+            panic!("expected list");
+        };
+        for item in items {
+            assert_eq!(item.content.len(), 1, "item split into {:?}", item.content);
+            assert!(matches!(item.content[0], Block::Paragraph { .. }));
+        }
+    }
+
 }

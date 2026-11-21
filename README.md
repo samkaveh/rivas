@@ -78,7 +78,13 @@ rivas examples/all-rendering-cases.md
 
 ## Editing
 
-Rivas supports edit in place with neovim style editting and key shortcuts.
+Rivas edits in place with Neovim-style modes and keys. Move the cursor onto
+any block and it switches to its syntax-highlighted Markdown source, right
+where the rendered block was; a colored marker in the left margin shows the
+block you are on and your mode (blue Normal, green Insert, purple Visual).
+Press `i` to type, `Esc` to return to Normal mode, and `:w` to save.
+
+Press `F1` (or type `:help`) for a keyboard reference.
 
 ## CLI Options
 
@@ -113,7 +119,8 @@ Running `rivas` with no arguments in a terminal will automatically open the curr
 
 - Rivas opens with the sidebar file tree visible on the left.
 - If a `README.md` or `index.md` exists in the folder, it is displayed immediately.
-- Use `↑`/`↓` to navigate files, `Enter` to open or toggle folders, and `\` to toggle the sidebar at any time.
+- Use `↑`/`↓` (or `j`/`k`) to navigate files, `Enter` to open or toggle folders, and `\` to toggle the sidebar at any time.
+- Press `/` in the sidebar to search every file in the workspace by path, including inside collapsed folders.
 
 ### 🌐 Serving in the Browser
 
@@ -134,11 +141,13 @@ rivas serve README.md --port 8080
 Press `:` in Normal mode and type `:serve` or `:browser`. Rivas will start the background server and open your current document in the browser immediately.
 
 **Browser Features:**
-- **Sidebar File Explorer**: Collapsible folder tree with real-time file search/filter (`Ctrl+P` or `/`).
+- **Sidebar File Explorer**: Collapsible folder tree with instant filtering (`/` or `Ctrl/⌘+K`); `\` shows or hides it.
 - **Live Reload (SSE)**: Automatically reloads whenever any Markdown file is edited and saved. Scroll position is preserved across reloads.
 - **Rich Rendering**: KaTeX math ($...$ and $$...$$), Mermaid diagrams, GitHub-flavored tables, task lists, and relative image resolution.
-- **Theme Switcher**: Toggle between Tokyo Night dark theme and clean light theme (`Ctrl+T` or header button).
-- **Raw View & Copy**: View raw Markdown or copy with one click.
+- **Light & Dark**: Follows your system setting; toggle with `t` or the header button.
+- **Editor with Live Preview**: Press `e` for a side-by-side editor whose preview updates as you type; save with `Ctrl/⌘+S`.
+- **Reading Aids**: An "On this page" outline, linkable headings, copy buttons on code blocks, and GitHub alerts (`> [!NOTE]`).
+- **Source & Copy**: View the Markdown source (`r`) or copy it (`c`). Press `?` for all shortcuts.
 
 ### Themes
 
@@ -159,8 +168,8 @@ Select one at startup:
 rivas --theme dracula document.md
 ```
 
-Or cycle through all themes at runtime with `Ctrl+T`; the active theme name is
-shown in the bottom status bar. Syntax highlighting, math images, and Mermaid
+Or cycle through all themes at runtime with `Ctrl+T`; the new theme's name is
+shown briefly in the status line. Syntax highlighting, math images, and Mermaid
 diagrams all follow the active theme.
 
 ### Math Modes

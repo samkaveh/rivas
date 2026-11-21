@@ -240,6 +240,32 @@ accessors! {
     dbg_bg => dbg_bg,
 }
 
+/// Linear blend of two RGB colors (`t` = 0 → `a`, 1 → `b`).
+pub fn blend(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb { r: r1, g: g1, b: b1 }, Color::Rgb { r: r2, g: g2, b: b2 }) => {
+            let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+            Color::Rgb {
+                r: mix(r1, r2),
+                g: mix(g1, g2),
+                b: mix(b1, b2),
+            }
+        }
+        _ => a,
+    }
+}
+
+/// Secondary text: between body text and comments. Used for quotes, list
+/// markers, completed tasks and status-bar details.
+pub fn muted() -> Color {
+    blend(current().fg, current().bg, 0.35)
+}
+
+/// A subtle surface one step up from the page (selected rows, chips).
+pub fn surface() -> Color {
+    blend(current().bg, current().fg, 0.08)
+}
+
 // ── Debug overlay colors (mapped onto the active palette's accents) ──────────
 pub fn dbg_heading() -> Color {
     current().blue
@@ -276,11 +302,7 @@ pub fn dbg_html() -> Color {
 }
 
 pub const VIEWPORT_BORDER_WIDTH: u32 = 2;
-pub const VIEWPORT_SCROLLBAR_WIDTH: u32 = 1;
 pub const VIEWPORT_INNER_PADDING: u32 = 4;
-pub const BLOCK_PADDING: u32 = 4;
-pub const TOTAL_VIEWPORT_OFFSET: u32 =
-    VIEWPORT_BORDER_WIDTH + VIEWPORT_SCROLLBAR_WIDTH + VIEWPORT_INNER_PADDING + BLOCK_PADDING;
 
 /// Horizontal room taken up by the viewport chrome (border + left/right padding)
 /// that graphics are placed inside, in columns. Used to cap image/diagram width

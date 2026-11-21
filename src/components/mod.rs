@@ -2,8 +2,6 @@
 pub mod blocks_renderer;
 /// Syntax-highlighted fenced code block rendering.
 pub mod code_block;
-/// Status-bar cursor position indicator with text preview.
-pub mod cursor_info;
 /// Top-level editor view combining cursor info and the block renderer.
 pub mod document;
 /// Vim-style modal editor with Normal, Insert, Visual, Command, and Search modes.
@@ -14,6 +12,8 @@ pub mod file_tree;
 pub mod footnote_block;
 /// ATX heading rendering (h1–h6) with optional icons.
 pub mod heading;
+/// Keyboard shortcut reference overlay (F1 / `:help`).
+pub mod help;
 /// Shared syntect syntax highlighting for raw buffer views.
 pub mod highlight;
 /// Raw HTML passthrough block rendering.

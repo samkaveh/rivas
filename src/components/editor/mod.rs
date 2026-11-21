@@ -65,6 +65,8 @@ pub struct EditorState {
     pub view_width: usize,
     /// Set to `true` when the editor should trigger a full re-render.
     pub needs_rerender: bool,
+    /// Set by `:help`; the document opens the help overlay and clears it.
+    pub help_requested: bool,
 }
 
 impl EditorState {
@@ -94,6 +96,7 @@ impl EditorState {
             view_height: 20,
             view_width: 80,
             needs_rerender: false,
+            help_requested: false,
         }
     }
 
@@ -551,6 +554,10 @@ impl EditorState {
                 self.needs_rerender = true;
                 false
             }
+            "help" | "h" => {
+                self.help_requested = true;
+                false
+            }
             "serve" | "browser" | "web" => {
                 let p = std::path::Path::new(&self.filename);
                 let root = if p.is_file() {
@@ -575,6 +582,7 @@ impl EditorState {
                         self.message = format!("E: Failed to start server: {}", e);
                     }
                 }
+                self.needs_rerender = true;
                 false
             }
             other => {

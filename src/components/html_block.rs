@@ -30,7 +30,7 @@ pub fn HtmlBlock(props: &HtmlBlockProps, mut hooks: Hooks) -> impl Into<AnyEleme
     if let Some(mut raw) = props.raw.clone() {
         raw.highlight = Some(highlighted);
         return element! {
-            View(margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw, color: theme::fg())
             }
         }
@@ -48,7 +48,7 @@ pub fn HtmlBlock(props: &HtmlBlockProps, mut hooks: Hooks) -> impl Into<AnyEleme
     );
 
     element! {
-        View(margin_bottom: 1, flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
+        View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
             #(styled_elements)
         }
     }

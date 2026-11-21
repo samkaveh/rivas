@@ -26,25 +26,16 @@ pub fn ThematicBreak(
     if let Some(mut raw) = props.raw.clone() {
         raw.highlight = Some(highlighted);
         return element! {
-            View(margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw, color: theme::dark_grey())
             }
         }
         .into_any();
     }
-    // Span the content area (viewport minus chrome) instead of a fixed length
-    // so the rule reads as a true horizontal break at any terminal size.
-    let width = props
-        .viewport
-        .as_ref()
-        .and_then(|v| v.width)
-        .unwrap_or(80)
-        .saturating_sub(theme::CONTENT_H_INSET + theme::VIEWPORT_SCROLLBAR_WIDTH)
-        .max(8);
+    // A bottom border spans the column exactly (see Heading for why rules
+    // are borders rather than text).
     element! {
-        View(margin_bottom: 1) {
-            Text(content: "─".repeat(width as usize), color: theme::dark_grey())
-        }
+        View(height: 1, border_style: BorderStyle::Single, border_edges: Edges::Bottom, border_color: theme::dark_grey()) {}
     }
     .into_any()
 }

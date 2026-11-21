@@ -46,7 +46,7 @@ pub fn Image(props: &ImageProps, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     // back to the source editor alone, matching the other text blocks.
     if raw.is_some() && !capabilities::has_kitty() {
         return element! {
-            View(margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw.map(with_highlight), color: theme::fg())
             }
         }
@@ -54,7 +54,7 @@ pub fn Image(props: &ImageProps, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     }
 
     element! {
-        View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
+        View(flex_direction: FlexDirection::Column) {
             #(props.title.clone().map(|title| element! {
                 View() {
                     Text(content: title, color: theme::comment())
@@ -66,11 +66,11 @@ pub fn Image(props: &ImageProps, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 }.into_any())
             } else {
                 Some(element! {
-                    Text(content: format!("[Image: {}]", label), color: theme::comment())
+                    Text(content: format!("▣ {}", label), color: theme::comment(), italic: true)
                 }.into_any())
             })
             #(raw.map(with_highlight).map(|r| element! {
-                View(margin_bottom: 1, background_color: theme::dark_bg()) {
+                View(background_color: theme::dark_bg()) {
                     RawBuffer(raw: r, color: theme::fg())
                 }
             }))
@@ -169,7 +169,7 @@ pub fn KittyImage(props: &KittyImageProps, mut hooks: Hooks) -> impl Into<AnyEle
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
             ) {
-                Text(content: format!("⏳ Loading image ({label})..."), color: theme::comment())
+                Text(content: format!("Loading {label}…"), color: theme::comment(), italic: true)
             }
         }.into_any()
     } else {
