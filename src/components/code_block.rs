@@ -15,74 +15,80 @@ pub struct CodeBlockProps {
     pub raw: Option<RawState>,
 }
 
-/// Renders a syntax-highlighted fenced code block.
+/// Renders a syntax-highlighted fenced code block as a tinted panel.
 ///
-/// Uses `syntect` for highlighting; the highlight scheme follows the active
-/// app theme (dark palettes get a dark scheme, light ones a light scheme).
-/// The language label is displayed in the top-right corner.
+/// Layout (rendered): a header row with the language label right-aligned in
+/// a muted color, the highlighted code, and one row of bottom padding. In the
+/// source view the opening fence takes the header row and the closing fence
+/// takes the padding row, so the panel keeps exactly the same height and
+/// position when you start editing it.
 #[component]
 pub fn CodeBlock(props: &CodeBlockProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
-    let lang_label = props.language.clone().unwrap_or_else(|| "code".to_string());
+    let lang_label = props.language.clone().unwrap_or_default();
 
     let token = props.language.as_deref().unwrap_or("text");
     // Rendered view highlights the code itself with the language token.
-    // The Normal-mode raw view shows the full source span (including fences);
-    // we keep the *language* highlighting for the code lines and style the
-    // fence lines explicitly, so highlight lines pair 1:1 with raw lines
+    // The source view shows the full span (including fences); we keep the
+    // *language* highlighting for the code lines and style the fence lines
+    // explicitly, so highlight lines pair 1:1 with raw lines
     // (highlight[i] ↔ text[i+1]) and RawBuffer never mispairs them.
     let highlighted = hooks.use_cached_highlight(&props.code, token, theme::fg());
 
-    element! {
-        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, margin_bottom: 1, background_color: theme::dark_bg()) {
-            View() {
-                Text(content: lang_label, color: theme::blue())
-            }
-            #(if props.raw.is_some() {
-                let raw = props.raw.clone().map(|mut raw| {
-                    // Map highlight lines onto raw text lines: when the span
-                    // includes the fences, fence rows get a dim style and code
-                    // rows keep the language-colored spans.
-                    let lines: Vec<&str> = raw.text.split('\n').collect();
-                    let n = lines.len();
-                    let fenced = lines.first().map_or(false, |l| l.trim_start().starts_with("```"));
-                    let mut hl: Vec<Vec<(String, Color)>> = Vec::with_capacity(n);
-                    for (idx, line) in lines.iter().enumerate() {
-                        if fenced && (idx == 0 || idx == n - 1) {
-                            hl.push(vec![(line.to_string(), theme::comment())]);
-                        } else {
-                            let h_idx = if fenced { idx - 1 } else { idx };
-                            hl.push(
-                                highlighted
-                                    .get(h_idx)
-                                    .cloned()
-                                    .unwrap_or_else(|| vec![(line.to_string(), theme::fg())]),
-                            );
-                        }
-                    }
-                    raw.highlight = Some(hl);
-                    raw
-                });
-                Some(element! {
-                    View(flex_direction: FlexDirection::Column) {
-                        RawBuffer(raw: raw, color: theme::fg())
-                    }
-                }.into_any())
+    if let Some(mut raw) = props.raw.clone() {
+        let lines: Vec<&str> = raw.text.split('\n').collect();
+        let n = lines.len();
+        let fenced = lines.first().map_or(false, |l| {
+            let t = l.trim_start();
+            t.starts_with("```") || t.starts_with("~~~")
+        });
+        let mut hl: Vec<Vec<(String, Color)>> = Vec::with_capacity(n);
+        for (idx, line) in lines.iter().enumerate() {
+            let is_fence = fenced && (idx == 0 || {
+                let t = line.trim_start();
+                idx == n - 1 && (t.starts_with("```") || t.starts_with("~~~"))
+            });
+            if is_fence {
+                hl.push(vec![(line.to_string(), theme::comment())]);
             } else {
-                Some(element! {
-                    View(flex_direction: FlexDirection::Column) {
-                        #(highlighted.iter().map(|line_spans| {
-                            element! {
-                                View(flex_direction: FlexDirection::Row) {
-                                    #(line_spans.iter().map(|(text, color)| {
-                                        element! { Text(content: text.clone(), color: *color) }.into_any()
-                                    }))
-                                }
-                            }
-                            .into_any()
-                        }))
-                    }
-                }.into_any())
-            }.into_iter())
+                let h_idx = if fenced { idx - 1 } else { idx };
+                hl.push(
+                    highlighted
+                        .get(h_idx)
+                        .cloned()
+                        .unwrap_or_else(|| vec![(line.to_string(), theme::fg())]),
+                );
+            }
+        }
+        raw.highlight = Some(hl);
+        return element! {
+            View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, background_color: theme::dark_bg()) {
+                RawBuffer(raw: raw, color: theme::fg())
+            }
+        };
+    }
+
+    element! {
+        View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, background_color: theme::dark_bg()) {
+            View(height: 1, justify_content: JustifyContent::End) {
+                Text(content: lang_label, color: theme::comment(), italic: true)
+            }
+            #(highlighted.iter().map(|line_spans| {
+                // One MixedText per line: long lines wrap as a single run,
+                // and blank lines still occupy their row.
+                let mut contents: Vec<MixedTextContent> = line_spans
+                    .iter()
+                    .filter(|(text, _)| !text.is_empty())
+                    .map(|(text, color)| MixedTextContent::new(text.clone()).color(*color))
+                    .collect();
+                if contents.is_empty() {
+                    contents.push(MixedTextContent::new(" "));
+                }
+                element! {
+                    MixedText(contents: contents, wrap: TextWrap::Wrap)
+                }
+                .into_any()
+            }))
+            View(height: 1) {}
         }
     }
 }

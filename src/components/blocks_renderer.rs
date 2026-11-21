@@ -9,10 +9,10 @@ use crate::components::math_block::MathBlock;
 use crate::components::mermaid_block::MermaidBlock;
 use crate::components::paragraph::Paragraph;
 use crate::components::quote_block::QuoteBlock;
-use crate::components::raw_buffer::RawState;
+use crate::components::raw_buffer::{CursorStyle, RawState};
 use crate::components::scroll::{
-    Viewport, build_cumulative_heights, compute_scroll_into_view_target, estimate_block_height,
-    find_cursor_block, visible_range_with_cursor,
+    Viewport, block_gap, build_cumulative_heights, compute_scroll_into_view_target,
+    estimate_block_height, find_cursor_block, visible_range_with_cursor,
 };
 use crate::components::table_block::TableBlock;
 use crate::components::thematic_break::ThematicBreak;
@@ -25,7 +25,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use unicode_width::UnicodeWidthChar;
 
 #[derive(Default, Props)]
 struct ScrollIntoViewContainerProps {
@@ -141,23 +140,26 @@ fn ScrollIntoViewContainer(
     );
 
     element! {
-        View() {
+        View(flex_direction: FlexDirection::Column) {
             #(props.child.as_ref().map(|f| f()).into_iter())
         }
     }
 }
 
-/// Renders a single block as a Markdown element, optionally in Normal-mode raw view.
+/// Renders a single block as a Markdown element, or — when `raw` is set — as
+/// its editable source.
 fn render_block_element(
     block: &Block,
     file_path: &std::path::PathBuf,
     viewport: &Option<Viewport>,
     raw: Option<RawState>,
+    muted: bool,
 ) -> AnyElement<'static> {
+    let text_color = muted.then(theme::muted);
     match block {
         Block::Heading { level, content, .. } => element!{
     Heading(level: *level, content: content.clone(), file_path: file_path.clone(), viewport: viewport.clone(), raw: raw.clone())}.into_any(),
-        Block::Paragraph { content, .. } => element!{Paragraph(content: content.clone(), file_path: file_path.clone(), viewport: viewport.clone(), raw: raw.clone())}.into_any(),
+        Block::Paragraph { content, .. } => element!{Paragraph(content: content.clone(), file_path: file_path.clone(), viewport: viewport.clone(), raw: raw.clone(), color: text_color)}.into_any(),
         Block::Code { language, code, .. } => element!{CodeBlock(language: language.clone(), code: code.clone(), raw: raw.clone())}.into_any(),
         Block::Mermaid { source, .. } => element!{MermaidBlock(source: source.clone(), viewport: viewport.clone(), raw: raw.clone())}.into_any(),
         Block::Math { content, display, .. } => element!{MathBlock(content: content.clone(), display: *display, viewport: viewport.clone(), raw: raw.clone())}.into_any(),
@@ -169,6 +171,46 @@ fn render_block_element(
         Block::Html { content, .. } => element!{HtmlBlock(content: content.clone(), file_path: Some(file_path.clone()), viewport: viewport.clone(), raw: raw.clone())}.into_any(),
         Block::FootnoteDefinition { label, children, .. } => element!{FootnoteBlock(label: label.clone(), children: children.clone(), file_path: Some(file_path.clone()), viewport: viewport.clone(), raw: raw.clone())}.into_any(),
     }
+}
+
+/// Columns the edit marker hangs into the left gutter (marker + one space).
+pub const EDIT_GUTTER: u32 = 2;
+
+/// Wraps the block being edited with a full-height, mode-colored marker that
+/// hangs in the left gutter (negative margin), so entering a block never
+/// shifts its text horizontally — the source appears exactly where the
+/// rendered block was.
+fn with_edit_marker(child: AnyElement<'static>, color: Color) -> AnyElement<'static> {
+    element! {
+        View(
+            flex_direction: FlexDirection::Column,
+            margin_left: -(EDIT_GUTTER as i32),
+            padding_left: EDIT_GUTTER - 1,
+            border_style: BorderStyle::Custom(BorderCharacters {
+                top_left: ' ', top_right: ' ', bottom_left: ' ', bottom_right: ' ',
+                left: '▎', right: ' ', top: ' ', bottom: ' ',
+            }),
+            border_edges: Edges::Left,
+            border_color: color,
+        ) {
+            #(Some(child))
+        }
+    }
+    .into_any()
+}
+
+/// Splits `text` into lines and locates `rel_off` (a byte offset into `text`)
+/// as `(line index, byte column)`.
+fn locate_cursor(text: &str, rel_off: usize) -> (Option<usize>, usize) {
+    let mut acc = 0usize;
+    let mut found = (None, 0usize);
+    for (idx, line) in text.split('\n').enumerate() {
+        if rel_off >= acc && rel_off <= acc + line.len() {
+            found = (Some(idx), rel_off - acc);
+        }
+        acc += line.len() + 1;
+    }
+    found
 }
 
 /// Properties for the [`BlocksRenderer`] component.
@@ -192,13 +234,19 @@ pub struct BlocksRendererProps {
     pub debug: bool,
     /// `true` to render inline debug annotations (highlight spans, block types).
     pub debug_annotations: bool,
+    /// Stack blocks with no gap between them (list item contents).
+    pub tight: bool,
+    /// Render prose in the secondary (muted) text color (block quotes).
+    pub muted: bool,
 }
 
 /// Renders a sequence of Markdown blocks with optional editor cursor overlay.
 ///
-/// Each block is rendered as its appropriate component (heading, paragraph, code, etc.).
-/// When the editor is active, a cursor block and visual selection highlights are overlaid.
-/// Line wrapping is applied based on the viewport width.
+/// Each block is rendered as its appropriate component (heading, paragraph,
+/// code, …) and followed by the gap from [`block_gap`]. The block under the
+/// editor cursor (and any block touched by a visual selection) renders as its
+/// syntax-highlighted source instead, through the same component in every
+/// mode, so pressing `i`/`v`/`Esc` only changes the cursor and marker color.
 #[component]
 pub fn BlocksRenderer(
     props: &BlocksRendererProps,
@@ -224,17 +272,16 @@ pub fn BlocksRenderer(
     let vw = props.viewport.as_ref().and_then(|v| v.width);
     let cursor_offset = props.cursor_offset.as_ref().map(|r| r.get());
 
-    let (vis_start, vis_end, mode, is_editing_mode) = if let Some(state_ref) = &props.editor_state {
+    let (vis_start, vis_end, mode, operator_pending) = if let Some(state_ref) = &props.editor_state {
         let s_opt = state_ref.read();
         if let Some(s) = s_opt.as_ref() {
             let start = s.absolute_byte_offset_at(s.visual_start.0, s.visual_start.1);
             let end = s.absolute_byte_offset();
-            let editing = matches!(s.mode, Mode::Insert | Mode::Command | Mode::Search { .. });
             (
                 Some(start.min(end)),
                 Some(start.max(end)),
                 s.mode.clone(),
-                editing,
+                s.operator.is_some(),
             )
         } else {
             (None, None, Mode::Normal, false)
@@ -242,6 +289,7 @@ pub fn BlocksRenderer(
     } else {
         (None, None, Mode::Normal, false)
     };
+    let top_level = props.editor_state.is_some();
 
     let block_counts = props.blocks.len();
 
@@ -282,14 +330,20 @@ pub fn BlocksRenderer(
 
     let cursor_block_idx = find_cursor_block(&starts, cursor_offset, block_counts);
 
-    let (first_visible, last_visible) = visible_range_with_cursor(
-        scroll_offset,
-        viewport_h as u32,
-        buffer,
-        &heights,
-        block_counts,
-        cursor_block_idx,
-    );
+    // Only the top-level renderer virtualizes; nested containers (quotes, list
+    // items) are short and receive no scroll offset of their own.
+    let (first_visible, last_visible) = if top_level {
+        visible_range_with_cursor(
+            scroll_offset,
+            viewport_h as u32,
+            buffer,
+            &heights,
+            block_counts,
+            cursor_block_idx,
+        )
+    } else {
+        (0, block_counts)
+    };
 
     // Log render tick for debug
     if props.debug {
@@ -324,10 +378,19 @@ pub fn BlocksRenderer(
         }
     }
 
+    let cursor_style = match mode {
+        Mode::Insert => CursorStyle::Insert,
+        _ if operator_pending => CursorStyle::Operator,
+        _ => CursorStyle::Block,
+    };
+
     element! {
         View(flex_direction: FlexDirection::Column) {
             #(props.blocks.iter().enumerate().map(|(i, block)| {
-                // Virtual scrolling: skip off-screen blocks
+                let gap = block_gap(props.blocks.get(i + 1), props.tight);
+
+                // Virtual scrolling: skip off-screen blocks (spacer height
+                // already includes the trailing gap).
                 if i < first_visible || i >= last_visible {
                     let h = heights[i + 1] - heights[i];
                     return element! { View(height: h) {} }.into_any();
@@ -336,408 +399,153 @@ pub fn BlocksRenderer(
                 let span = block.span();
                 let next_span_start = props.blocks.get(i + 1).map(|b| b.span().0).unwrap_or(props.content.len());
 
-                // is_cursor_here: cursor is on this block or in the gap before the next block
-                let is_cursor_here = cursor_offset.map_or(false, |off| {
+                // The cursor belongs to this block when it is on it or in the
+                // blank gap before the next block.
+                let is_cursor_here = top_level && cursor_offset.map_or(false, |off| {
                     if i + 1 == block_counts {
                         off >= span.0 && off <= next_span_start
                     } else {
                         off >= span.0 && off < next_span_start
                     }
                 });
-                // Only show raw text editing view when cursor is on the block AND
-                // the editor is in an editing mode (Insert/Command/Search).
-                // In Normal mode, blocks stay as their rendered markdown form (view-only).
-                let is_active = is_editing_mode && is_cursor_here;
-                let is_selected = mode == Mode::Visual && vis_start.map_or(false, |start| {
-                    vis_end.map_or(false, |end| {
-                        span.0 <= end && span.1 >= start
-                    })
+                let is_selected = top_level && mode == Mode::Visual && vis_start.map_or(false, |start| {
+                    vis_end.map_or(false, |end| span.0 <= end && span.1 >= start)
                 });
 
-                if is_active || is_selected {
+                let raw_state = if is_cursor_here || is_selected {
                     let off = cursor_offset.unwrap_or(0);
-                    let text_end = if is_active && off > span.1 {
+                    // When the cursor sits in the blank gap after the block,
+                    // extend the source view down to it so the cursor is
+                    // drawn on the line it is actually on.
+                    let text_end = if is_cursor_here && off > span.1 {
                         if i + 1 == block_counts {
                             off.min(next_span_start)
                         } else {
-                            off.min(next_span_start - 1)
+                            off.min(next_span_start.saturating_sub(1))
                         }
                     } else {
                         span.1
                     };
-                    let text = &props.content[span.0..text_end];
-                    let rel_off = off.saturating_sub(span.0).min(text.len());
-
-                    let lines: Vec<&str> = text.split('\n').collect();
-                    let mut current_byte_acc = 0;
-                    let mut cursor_line_idx = None;
-                    let mut cursor_rel_off = 0;
-
-                    for (idx, line) in lines.iter().enumerate() {
-                        let line_len = line.len();
-                        if rel_off >= current_byte_acc && rel_off <= current_byte_acc + line_len {
-                            cursor_line_idx = Some(idx);
-                            cursor_rel_off = rel_off - current_byte_acc;
-                        }
-                        current_byte_acc += line_len + 1;
+                    let text_end = text_end.max(span.0).min(props.content.len());
+                    let mut text = &props.content[span.0..text_end];
+                    // Block spans often end with the newline(s) separating
+                    // them from the next block; don't show those as empty
+                    // source rows unless the cursor is actually on them.
+                    let rel_off = off.saturating_sub(span.0);
+                    while text.ends_with('\n') && (!is_cursor_here || rel_off < text.len()) {
+                        text = &text[..text.len() - 1];
                     }
-
-                    let cursor_bg = match mode {
-                        Mode::Normal => theme::fg(),
-                        Mode::Insert => theme::green(),
-                        Mode::Visual => theme::magenta(),
-                        Mode::Command | Mode::Search { .. } => theme::yellow(),
+                    let text_end = span.0 + text.len();
+                    let (cursor_line, cursor_col) = if is_cursor_here {
+                        locate_cursor(text, off.saturating_sub(span.0).min(text.len()))
+                    } else {
+                        (None, 0)
                     };
-
-                    let (cursor_fg, cursor_bg_final, cursor_char) = if let Some(state_ref) = &props.editor_state {
-                        let s_opt = state_ref.read();
-                        if let Some(s) = s_opt.as_ref() {
-                            if s.mode == Mode::Insert {
-                                (cursor_bg, theme::dark_bg(), "┃")
-                            } else if s.operator.is_some() {
-                                (cursor_bg, theme::dark_bg(), "_")
-                            } else {
-                                (theme::dark_bg(), cursor_bg, " ")
-                            }
-                        } else {
-                            (theme::dark_bg(), cursor_bg, " ")
+                    let selection = if mode == Mode::Visual {
+                        match (vis_start, vis_end) {
+                            (Some(a), Some(b)) if b >= span.0 && a < text_end.max(span.0 + 1) => Some((
+                                a.max(span.0) - span.0,
+                                b.min(text_end.saturating_sub(1)).saturating_sub(span.0),
+                            )),
+                            _ => None,
                         }
                     } else {
-                        (theme::dark_bg(), cursor_bg, " ")
+                        None
                     };
+                    Some(RawState {
+                        text: text.to_string(),
+                        cursor_line,
+                        cursor_col,
+                        cursor_style,
+                        selection,
+                        highlight: None,
+                    })
+                } else {
+                    None
+                };
+                let cursor_row = raw_state.as_ref().and_then(|r| r.cursor_line);
 
-                    // Convert to owned strings for the factory closure
-                    let lines_owned: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-                    let span_siv = span;
-                    let vw_siv = vw;
-                    let vis_start_siv = vis_start;
-                    let vis_end_siv = vis_end;
-                    let mode_siv = mode.clone();
-                    let cursor_line_idx_siv = cursor_line_idx;
-                    let cursor_rel_off_siv = cursor_rel_off;
-                    let cursor_char_siv = cursor_char.to_string();
-                    let cursor_fg_siv = cursor_fg;
-                    let cursor_bg_final_siv = cursor_bg_final.clone();
-                    let editor_state_siv = props.editor_state.clone();
-                    let scroll_handle_siv = props.scroll_handle.clone();
+                let rendered = render_block_element(block, &file_path, &props.viewport, raw_state.clone(), props.muted);
 
-                    let factory: Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static> = Arc::new(move || {
-                        // No horizontal padding here: the document container
-                        // (document.rs) already insets all blocks by 2, and
-                        // rendered blocks don't add their own — keeping the raw
-                        // view padding-free aligns both views' left edges.
-                        element! {
-                            View(
-                                background_color: theme::dark_bg(),
-                                flex_direction: FlexDirection::Column,
-                                overflow: Overflow::Hidden,
-                            ) {
-                                #(lines_owned.iter().enumerate().map(|(idx, line)| {
-                                    let line_start_off = span_siv.0 + lines_owned[..idx].iter().map(|l| l.len() + 1).sum::<usize>();
-                                    let wrap_width = (vw_siv.unwrap_or(80) as i32 - theme::TOTAL_VIEWPORT_OFFSET as i32).max(1) as usize;
-                                    let mut segments = Vec::new();
-                                    let mut remaining: &str = line;
-                                    while !remaining.is_empty() {
-                                        let mut col_width = 0usize;
-                                        let mut split_at = remaining.len();
-                                        for (byte_idx, ch) in remaining.char_indices() {
-                                            let w = ch.width().unwrap_or(0);
-                                            if col_width + w > wrap_width {
-                                                split_at = byte_idx;
-                                                break;
-                                            }
-                                            col_width += w;
-                                        }
-
-                                        if split_at < remaining.len() {
-                                            if let Some(last_space) = remaining[..split_at].rfind(' ') {
-                                                if last_space > 0 {
-                                                    split_at = last_space + 1;
-                                                }
-                                            }
-                                        }
-                                        segments.push(&remaining[..split_at]);
-                                        remaining = &remaining[split_at..];
-                                    }
-                                    if segments.is_empty() {
-                                        segments.push("");
-                                    }
-
-                                    element! {
-                                        View(flex_direction: FlexDirection::Column) {
-                                            #(segments.iter().enumerate().map(|(seg_idx, segment)| {
-                                                if mode_siv == Mode::Visual {
-                                                    if let (Some(start), Some(end)) = (vis_start_siv, vis_end_siv) {
-                                                        let seg_start_off = line_start_off + segments[..seg_idx].iter().map(|s| s.len()).sum::<usize>();
-                                                        let mut line_parts: Vec<(bool, String)> = Vec::new();
-                                                        let mut current_pos = seg_start_off;
-                                                        let seg_chars: Vec<char> = segment.chars().collect();
-                                                        for c in seg_chars {
-                                                            let char_len = c.len_utf8();
-                                                            let is_selected = current_pos >= start && current_pos <= end;
-                                                            if let Some(last) = line_parts.last_mut() {
-                                                                if last.0 == is_selected {
-                                                                    last.1.push(c);
-                                                                    current_pos += char_len;
-                                                                    continue;
-                                                                }
-                                                            }
-                                                            line_parts.push((is_selected, c.to_string()));
-                                                            current_pos += char_len;
-                                                        }
-                                                        element! {
-                                                            View(flex_direction: FlexDirection::Row) {
-                                                                #(line_parts.iter().map(|(selected, text)| element! {
-                                                                    Text(content: text.clone(), color: if *selected { theme::magenta() } else { theme::fg() }, wrap: TextWrap::Wrap)
-                                                                }))
-                                                            }
-                                                        }.into_any()
-                                                    } else {
-                                                        element! { Text(content: segment.to_string(), color: theme::fg(), wrap: TextWrap::Wrap) }.into_any()
-                                                    }
-                                                } else if Some(idx) == cursor_line_idx_siv {
-                                                    let mut seg_idx_cursor = 0;
-                                                    let mut seg_rel_off = cursor_rel_off_siv;
-                                                    for seg in &segments {
-                                                        if seg_rel_off <= seg.len() { break; }
-                                                        seg_rel_off -= seg.len();
-                                                        seg_idx_cursor += 1;
-                                                    }
-                                                    if seg_idx == seg_idx_cursor {
-                                                        let (before, after_with_char) = segment.split_at(seg_rel_off.min(segment.len()));
-
-                                                        let before_str = before.to_string();
-                                                        let cursor_char_str = cursor_char_siv.clone();
-                                                        let cursor_bg_final_clone = cursor_bg_final_siv.clone();
-                                                        let cursor_fg_clone = cursor_fg_siv;
-                                                        let editor_state_clone = editor_state_siv.clone();
-
-                                                        let inner_factory: Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static> = if let Some(c) = after_with_char.chars().next() {
-                                                            let char_len = c.len_utf8();
-                                                            let after_str = after_with_char[char_len..].to_string();
-                                                            let c_str = c.to_string();
-
-                                                            Arc::new(move || {
-                                                                if let Some(state_ref) = &editor_state_clone {
-                                                                    let s_opt = state_ref.read();
-                                                                    if let Some(s) = s_opt.as_ref() {
-                                                                        if s.mode == Mode::Insert {
-                                                                            element! {
-                                                                                View(flex_direction: FlexDirection::Row) {
-                                                                                    Text(content: before_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                                    View(background_color: cursor_bg_final_clone, width: 1) {
-                                                                                        Text(content: cursor_char_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
-                                                                                    }
-                                                                                    Text(content: format!("{}{}", c_str, after_str), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                                }
-                                                                            }.into_any()
-                                                                        } else if s.operator.is_some() {
-                                                                            element! {
-                                                                                View(flex_direction: FlexDirection::Row) {
-                                                                                    Text(content: before_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                                    View(background_color: cursor_bg_final_clone, width: 1) {
-                                                                                        Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
-                                                                                    }
-                                                                                    Text(content: after_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                                }
-                                                                            }.into_any()
-                                                                        } else {
-                                                                            element! {
-                                                                                View(flex_direction: FlexDirection::Row) {
-                                                                                    Text(content: before_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                                    View(background_color: cursor_bg_final_clone, width: 1) {
-                                                                                        Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
-                                                                                    }
-                                                                                    Text(content: after_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                                }
-                                                                            }.into_any()
-                                                                        }
-                                                                    } else {
-                                                                        element! {
-                                                                            View(flex_direction: FlexDirection::Row) {
-                                                                                Text(content: before_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                                View(background_color: cursor_bg_final_clone, width: 1) {
-                                                                                    Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
-                                                                                }
-                                                                                Text(content: after_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                            }
-                                                                        }.into_any()
-                                                                    }
-                                                                } else {
-                                                                    element! {
-                                                                        View(flex_direction: FlexDirection::Row) {
-                                                                            Text(content: before_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                            View(background_color: cursor_bg_final_clone, width: 1) {
-                                                                                Text(content: c_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
-                                                                            }
-                                                                            Text(content: after_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                        }
-                                                                    }.into_any()
-                                                                }
-                                                            })
-                                                        } else {
-                                                            Arc::new(move || {
-                                                                element! {
-                                                                    View(flex_direction: FlexDirection::Row) {
-                                                                        Text(content: before_str.clone(), color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                        View(background_color: cursor_bg_final_clone, width: 1) {
-                                                                            Text(content: cursor_char_str.clone(), color: cursor_fg_clone, wrap: TextWrap::Wrap)
-                                                                        }
-                                                                        Text(content: "", color: theme::fg(), wrap: TextWrap::Wrap)
-                                                                    }
-                                                                }.into_any()
-                                                            })
-                                                        };
-
-                                                        element! {
-                                                            ScrollIntoViewContainer(
-                                                                scroll_handle: scroll_handle_siv.clone(),
-                                                                cursor_moved,
-                                                                child: Some(inner_factory),
-                                                                cursor_row: cursor_line_idx_siv.map(|r| r as i32),
-                                                                bottom_offset: Some(0),
-                                                                block_identity: Some(i as i32),
-                                                            )
-                                                        }.into_any()
-                                                    } else {
-                                                        element! { Text(content: segment.to_string(), color: theme::fg(), wrap: TextWrap::Wrap) }.into_any()
-                                                    }
-                                                } else {
-                                                    element! { Text(content: segment.to_string(), color: theme::fg(), wrap: TextWrap::Wrap) }.into_any()
-                                                }
-                                            }))
-                                        }
-                                    }.into_any()
-                                }))
-                            }
-                        }.into_any()
+                // Wrap with debug border/label if debug annotations are enabled
+                let rendered = if props.debug_annotations {
+                    let (label, color) = match block {
+                        Block::Heading { .. } => ("H".to_string(), theme::dbg_heading()),
+                        Block::Paragraph { .. } => ("P".to_string(), theme::dbg_paragraph()),
+                        Block::Code { .. } => ("Code".to_string(), theme::dbg_code()),
+                        Block::Image { .. } => ("Img".to_string(), theme::dbg_image()),
+                        Block::Math { .. } => ("Math".to_string(), theme::dbg_math()),
+                        Block::Mermaid { .. } => ("Mermaid".to_string(), theme::dbg_mermaid()),
+                        Block::Quote { .. } => (">".to_string(), theme::dbg_quote()),
+                        Block::Table { .. } => ("Table".to_string(), theme::dbg_table()),
+                        Block::List { .. } => ("List".to_string(), theme::dbg_list()),
+                        Block::ThematicBreak { .. } => ("---".to_string(), theme::dbg_break()),
+                        Block::Html { .. } => ("HTML".to_string(), theme::dbg_html()),
+                        Block::FootnoteDefinition { .. } => ("FN".to_string(), theme::dbg_quote()),
+                    };
+                    let est_h = estimate_block_height(block, &props.content, vw);
+                    debug::log_event(&debug::DebugEvent::BlockLayout {
+                        ts: debug::elapsed_ms(),
+                        idx: i,
+                        block_type: label.clone(),
+                        span_start: span.0,
+                        span_end: span.1,
+                        est_height: est_h,
                     });
-
                     element! {
-                        ScrollIntoViewContainer(
-                            scroll_handle: scroll_handle_siv,
-                            cursor_moved,
-                            child: Some(factory),
-                            cursor_row: cursor_line_idx.map(|r| r as i32),
-                            bottom_offset: Some(0),
-                            block_identity: Some(i as i32),
-                        )
+                        View(flex_direction: FlexDirection::Column) {
+                            View(flex_direction: FlexDirection::Row, background_color: color, padding_left: 1) {
+                                Text(content: format!("[{} {}..{} h={}]", label, span.0, span.1, est_h), color: theme::dark_bg(), weight: Weight::Bold)
+                            }
+                            View(border_style: BorderStyle::Single, border_color: color, background_color: theme::dbg_bg()) {
+                                #(Some(rendered).into_iter())
+                            }
+                        }
                     }.into_any()
                 } else {
-                    // Render block as formatted markdown. In Normal mode, if the
-                    // cursor is on this block, pass the raw buffer + cursor so the
-                    // block renders its source view in place.
-                    let (raw_state, cursor_line_idx) = if is_cursor_here && !is_editing_mode {
-                        let off = cursor_offset.unwrap_or(0);
-                        let text = &props.content[span.0..span.1];
-                        let rel_off = off.saturating_sub(span.0).min(text.len());
+                    rendered
+                };
 
-                        let lines: Vec<&str> = text.split('\n').collect();
-                        let mut current_byte_acc = 0;
-                        let mut cursor_line_idx = None;
-                        let mut cursor_rel_off = 0;
-                        for (idx, line) in lines.iter().enumerate() {
-                            let line_len = line.len();
-                            if rel_off >= current_byte_acc && rel_off <= current_byte_acc + line_len {
-                                cursor_line_idx = Some(idx);
-                                cursor_rel_off = rel_off - current_byte_acc;
-                            }
-                            current_byte_acc += line_len + 1;
-                        }
-
-                        let operator = match props.editor_state.as_ref() {
-                            Some(r) => r
-                                .read()
-                                .as_ref()
-                                .map(|s| s.operator.is_some())
-                                .unwrap_or(false),
-                            None => false,
-                        };
-
-                        (
-                            Some(RawState {
-                                text: text.to_string(),
-                                cursor_line: cursor_line_idx,
-                                cursor_col: cursor_rel_off,
-                                operator,
-                                highlight: None,
-                            }),
-                            cursor_line_idx,
-                        )
-                    } else {
-                        (None, None)
-                    };
-
-                    let rendered =
-                        render_block_element(block, &file_path, &props.viewport, raw_state.clone());
-
-                    // Wrap with debug border/label if debug annotations are enabled
-                    let rendered = if props.debug_annotations {
-                        let (label, color) = match block {
-                            Block::Heading { .. } => ("H".to_string(), theme::dbg_heading()),
-                            Block::Paragraph { .. } => ("P".to_string(), theme::dbg_paragraph()),
-                            Block::Code { .. } => ("Code".to_string(), theme::dbg_code()),
-                            Block::Image { .. } => ("Img".to_string(), theme::dbg_image()),
-                            Block::Math { .. } => ("Math".to_string(), theme::dbg_math()),
-                            Block::Mermaid { .. } => ("Mermaid".to_string(), theme::dbg_mermaid()),
-                            Block::Quote { .. } => (">".to_string(), theme::dbg_quote()),
-                            Block::Table { .. } => ("Table".to_string(), theme::dbg_table()),
-                            Block::List { .. } => ("List".to_string(), theme::dbg_list()),
-                            Block::ThematicBreak { .. } => ("---".to_string(), theme::dbg_break()),
-                            Block::Html { .. } => ("HTML".to_string(), theme::dbg_html()),
-                            Block::FootnoteDefinition { .. } => ("FN".to_string(), theme::dbg_quote()),
-                        };
-                        let est_h = estimate_block_height(block, &props.content, vw);
-                        debug::log_event(&debug::DebugEvent::BlockLayout {
-                            ts: debug::elapsed_ms(),
-                            idx: i,
-                            block_type: label.clone(),
-                            span_start: span.0,
-                            span_end: span.1,
-                            est_height: est_h,
-                        });
-                        element! {
-                            View(flex_direction: FlexDirection::Column) {
-                                View(flex_direction: FlexDirection::Row, background_color: color, padding_left: 1) {
-                                    Text(content: format!("[{} {}..{} h={}]", label, span.0, span.1, est_h), color: theme::dark_bg(), weight: Weight::Bold)
-                                }
-                                View(border_style: BorderStyle::Single, border_color: color, background_color: theme::dbg_bg()) {
-                                    #(Some(rendered).into_iter())
-                                }
-                            }
-                        }.into_any()
-                    } else {
-                        rendered
-                    };
-
-                    if raw_state.is_some() {
-                        let block_clone = block.clone();
-                        let file_path_clone = file_path.clone();
-                        let viewport_clone = props.viewport.clone();
-                        let raw_clone = raw_state.clone();
-                        let factory: Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static> =
-                            Arc::new(move || {
+                let body = if is_cursor_here {
+                    let block_clone = block.clone();
+                    let file_path_clone = file_path.clone();
+                    let viewport_clone = props.viewport.clone();
+                    let raw_clone = raw_state.clone();
+                    let marker = mode.color();
+                    let factory: Arc<dyn Fn() -> AnyElement<'static> + Send + Sync + 'static> =
+                        Arc::new(move || {
+                            with_edit_marker(
                                 render_block_element(
                                     &block_clone,
                                     &file_path_clone,
                                     &viewport_clone,
                                     raw_clone.clone(),
-                                )
-                            });
-                        element! {
-                            ScrollIntoViewContainer(
-                                scroll_handle: props.scroll_handle.clone(),
-                                cursor_moved,
-                                child: Some(factory),
-                                cursor_row: cursor_line_idx.map(|r| r as i32),
-                                bottom_offset: Some(0),
-                                block_identity: Some(i as i32),
+                                    false,
+                                ),
+                                marker,
                             )
-                        }.into_any()
-                    } else {
-                        rendered
+                        });
+                    element! {
+                        ScrollIntoViewContainer(
+                            scroll_handle: props.scroll_handle.clone(),
+                            cursor_moved,
+                            child: Some(factory),
+                            cursor_row: cursor_row.map(|r| r as i32),
+                            bottom_offset: Some(0),
+                            block_identity: Some(i as i32),
+                        )
+                    }.into_any()
+                } else if is_selected {
+                    with_edit_marker(rendered, theme::magenta())
+                } else {
+                    rendered
+                };
+
+                element! {
+                    View(flex_direction: FlexDirection::Column, margin_bottom: gap) {
+                        #(Some(body))
                     }
-                }
+                }.into_any()
             }))
         }
     }
@@ -820,8 +628,8 @@ mod tests {
             ],
             span: (0, 20),
         };
-        // header + 2 rows = 3
-        assert_eq!(estimate_block_height(&block, "", Some(80)), 3);
+        // top border + header + header rule + 2 rows + bottom border = 6
+        assert_eq!(estimate_block_height(&block, "", Some(80)), 6);
     }
 
     #[test]

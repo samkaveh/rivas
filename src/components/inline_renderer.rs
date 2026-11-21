@@ -42,68 +42,190 @@ fn strike_text(s: &str) -> String {
     out
 }
 
-/// Folds soft-break spaces into the *trailing* text of the previous inline so
-/// a source newline never becomes (or prefixes) its own layout element.
-///
-/// Why trailing, not leading: iocraft wraps whole flex items to the next row
-/// when they don't fit, keeping any leading space intact — which showed up as
-/// a visible indent before the first word of wrapped lines. A *trailing* space
-/// at the end of a wrapped line is invisible, so appending backwards is always
-/// safe. Soft breaks that follow non-text elements (code chips, images, math)
-/// survive here and are consumed by the renderer as a small margin instead.
-fn merge_softbreaks(inlines: Vec<Inline>) -> Vec<Inline> {
-    let mut out: Vec<Inline> = Vec::with_capacity(inlines.len());
+/// One styled piece of inline content, before it is grouped into words.
+enum Piece {
+    /// A run of text in one style (may contain spaces).
+    Text {
+        text: String,
+        color: Color,
+        style: TextStyle,
+        link: Option<String>,
+    },
+    /// Inline code: rendered as a padded chip on a tinted background.
+    Code(String),
+    /// An atomic element (inline math, image).
+    Element(AnyElement<'static>),
+    /// A hard line break.
+    Break,
+}
+
+/// Flattens nested inlines into a linear list of styled pieces.
+fn collect_pieces(
+    inlines: &[Inline],
+    color: Color,
+    style: TextStyle,
+    link: Option<&str>,
+    file_path: Option<&PathBuf>,
+    viewport_height: Option<u32>,
+    viewport_width: Option<u32>,
+    out: &mut Vec<Piece>,
+) {
+    let text_piece = |text: String, color: Color, style: TextStyle, link: Option<&str>| Piece::Text {
+        text,
+        color,
+        style,
+        link: link.map(str::to_string),
+    };
     for inline in inlines {
         match inline {
-            Inline::SoftBreak => {
-                let folded = match out.last_mut() {
-                    Some(Inline::Text(t)) => {
-                        if !t.ends_with(' ') {
-                            t.push(' ');
-                        }
-                        true
-                    }
-                    Some(other) => append_space_to_last_text(other),
-                    None => false,
-                };
-                if !folded {
-                    out.push(Inline::SoftBreak);
+            Inline::Text(t) => out.push(text_piece(t.clone(), color, style, link)),
+            Inline::SoftBreak => out.push(text_piece(" ".into(), color, style, link)),
+            Inline::HardBreak => out.push(Piece::Break),
+            Inline::Bold(ch) => collect_pieces(ch, color, TextStyle { bold: true, ..style }, link, file_path, viewport_height, viewport_width, out),
+            Inline::Italic(ch) => collect_pieces(ch, color, TextStyle { italic: true, ..style }, link, file_path, viewport_height, viewport_width, out),
+            Inline::Strikethrough(ch) => collect_pieces(ch, color, TextStyle { strikethrough: true, ..style }, link, file_path, viewport_height, viewport_width, out),
+            Inline::Underline(ch) => collect_pieces(ch, color, TextStyle { underline: true, ..style }, link, file_path, viewport_height, viewport_width, out),
+            Inline::Subscript(ch) => out.push(text_piece(scripts_to_unicode(&inlines_to_text(ch), false), color, style, link)),
+            Inline::Superscript(ch) => out.push(text_piece(scripts_to_unicode(&inlines_to_text(ch), true), color, style, link)),
+            Inline::Code(c) => out.push(Piece::Code(c.clone())),
+            Inline::Link { text, url } => {
+                let link_style = TextStyle { underline: true, ..style };
+                if inlines_to_text(text).trim().is_empty() {
+                    // Links with no visible label fall back to the URL itself
+                    // so `[](target)` never disappears entirely.
+                    out.push(text_piece(url.clone(), theme::blue(), link_style, Some(url)));
+                } else {
+                    collect_pieces(text, theme::blue(), link_style, Some(url), file_path, viewport_height, viewport_width, out);
                 }
             }
-            Inline::Bold(c) => out.push(Inline::Bold(merge_softbreaks(c))),
-            Inline::Italic(c) => out.push(Inline::Italic(merge_softbreaks(c))),
-            Inline::Strikethrough(c) => out.push(Inline::Strikethrough(merge_softbreaks(c))),
-            Inline::Underline(c) => out.push(Inline::Underline(merge_softbreaks(c))),
-            Inline::Subscript(c) => out.push(Inline::Subscript(merge_softbreaks(c))),
-            Inline::Superscript(c) => out.push(Inline::Superscript(merge_softbreaks(c))),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Appends a separating space to the deepest trailing text of `inline`.
-/// Returns `false` when there is no text descendant to append to.
-fn append_space_to_last_text(inline: &mut Inline) -> bool {
-    match inline {
-        Inline::Text(t) => {
-            if !t.ends_with(' ') {
-                t.push(' ');
+            Inline::FootnoteRef(label) => {
+                // Numeric labels render as Unicode superscripts (e.g. `text¹`);
+                // anything else keeps the readable `[^label]` form.
+                let content = if !label.is_empty() && label.chars().all(|c| c.is_ascii_digit()) {
+                    scripts_to_unicode(label, true)
+                } else {
+                    format!("[^{}]", label)
+                };
+                out.push(text_piece(content, theme::blue(), TextStyle::plain(), None));
             }
-            true
+            Inline::Math(m) => {
+                let el = if math_mode() == MathMode::Image {
+                    let vp = viewport_height.map(|h| Viewport {
+                        height: Some(h),
+                        width: viewport_width,
+                        scroll_offset: None,
+                    });
+                    element! { KittyMath(content: m.clone(), display: false, viewport: vp) }.into_any()
+                } else {
+                    element! { UnicodeMath(content: m.clone(), display: false) }.into_any()
+                };
+                out.push(Piece::Element(el));
+            }
+            Inline::Image { alt: _, url } => {
+                let vp = viewport_height.map(|h| Viewport {
+                    height: Some(h),
+                    width: viewport_width,
+                    scroll_offset: None,
+                });
+                out.push(Piece::Element(element! {
+                    KittyImage(url: url.clone(), file_path: file_path.cloned().unwrap_or_default(), viewport: vp)
+                }.into_any()));
+            }
         }
-        Inline::Bold(c)
-        | Inline::Italic(c)
-        | Inline::Strikethrough(c)
-        | Inline::Underline(c)
-        | Inline::Subscript(c)
-        | Inline::Superscript(c) => c.last_mut().map_or(false, append_space_to_last_text),
-        Inline::Link { text, .. } => text.last_mut().map_or(false, append_space_to_last_text),
-        _ => false,
     }
 }
 
-/// Renders a list of inlines into a Vec of AnyElement for display
+/// Groups pieces into unbreakable "words": a word ends after a run of
+/// whitespace, so `**bold**,` or `` `code`. `` stay together while the line
+/// may wrap at any space. Each group becomes one flex item.
+fn group_words(pieces: Vec<Piece>) -> Vec<Vec<Piece>> {
+    let mut groups: Vec<Vec<Piece>> = Vec::new();
+    let mut cur: Vec<Piece> = Vec::new();
+    for piece in pieces {
+        match piece {
+            Piece::Text { text, color, style, link } => {
+                let mut buf = String::new();
+                let mut in_ws = false;
+                for ch in text.chars() {
+                    if ch.is_whitespace() {
+                        // Collapse whitespace runs (incl. newlines) to one space.
+                        if !in_ws {
+                            buf.push(' ');
+                        }
+                        in_ws = true;
+                    } else {
+                        if in_ws {
+                            cur.push(Piece::Text { text: std::mem::take(&mut buf), color, style, link: link.clone() });
+                            groups.push(std::mem::take(&mut cur));
+                            in_ws = false;
+                        }
+                        buf.push(ch);
+                    }
+                }
+                if !buf.is_empty() {
+                    // A run that is only whitespace attaches to the previous
+                    // word (e.g. the space after a code chip).
+                    cur.push(Piece::Text { text: buf, color, style, link: link.clone() });
+                    if in_ws {
+                        groups.push(std::mem::take(&mut cur));
+                    }
+                }
+            }
+            Piece::Break => {
+                if !cur.is_empty() {
+                    groups.push(std::mem::take(&mut cur));
+                }
+                groups.push(vec![Piece::Break]);
+            }
+            other => cur.push(other),
+        }
+    }
+    if !cur.is_empty() {
+        groups.push(cur);
+    }
+    groups
+}
+
+fn render_piece(piece: Piece) -> AnyElement<'static> {
+    match piece {
+        Piece::Text { text, color, style, link } => {
+            let content = if style.strikethrough { strike_text(&text) } else { text };
+            element! {
+                Text(
+                    content: content,
+                    color: color,
+                    weight: if style.bold { Weight::Bold } else { Weight::Normal },
+                    italic: style.italic,
+                    decoration: if style.underline { TextDecoration::Underline } else { TextDecoration::None },
+                    hyperlink: link,
+                )
+            }
+            .into_any()
+        }
+        Piece::Code(code) => {
+            let content = match code.strip_suffix('\u{0}') {
+                Some(tight) => format!(" {tight}"),
+                None => format!(" {code} "),
+            };
+            element! {
+                View(background_color: theme::surface(), flex_shrink: 1.0) {
+                    Text(content: content, color: theme::green())
+                }
+            }
+            .into_any()
+        }
+        Piece::Element(el) => el,
+        // A zero-width text never forces a flex wrap, so a hard break is a
+        // full-width empty item: the next word starts a new line.
+        Piece::Break => element! { View(width: 100pct) {} }.into_any(),
+    }
+}
+
+/// Renders a list of inlines into flex items for a wrapping row container.
+///
+/// Each item is one word group (see [`group_words`]), so the surrounding
+/// `View(flex_wrap: Wrap)` breaks lines only between words, like a text
+/// layout engine would, while code chips and math keep their own styling.
 pub fn render_inlines(
     inlines: &[Inline],
     base_color: Color,
@@ -112,322 +234,78 @@ pub fn render_inlines(
     viewport_height: Option<u32>,
     viewport_width: Option<u32>,
 ) -> Vec<AnyElement<'static>> {
-    let merged = merge_softbreaks(inlines.to_vec());
-    let mut elements = Vec::new();
-    let mut pending_space = false;
-    render_inlines_recursive(
-        &merged,
+    let mut pieces = Vec::new();
+    collect_pieces(
+        inlines,
         base_color,
-        TextStyle {
-            bold,
-            ..TextStyle::plain()
-        },
+        TextStyle { bold, ..TextStyle::plain() },
+        None,
         file_path,
         viewport_height,
         viewport_width,
-        &mut elements,
-        &mut pending_space,
+        &mut pieces,
     );
-    elements
-}
-
-fn styled_span(color: Color, style: TextStyle, content: String) -> AnyElement<'static> {
-    let content = if style.strikethrough {
-        strike_text(&content)
-    } else {
-        content
-    };
-    element! {
-        Text(
-            content: content,
-            color: color,
-            weight: if style.bold { Weight::Bold } else { Weight::Normal },
-            italic: style.italic,
-            decoration: if style.underline { TextDecoration::Underline } else { TextDecoration::None }
-        )
+    // Leading whitespace (e.g. from a soft break at the start) never renders.
+    if let Some(Piece::Text { text, .. }) = pieces.first_mut() {
+        let trimmed = text.trim_start().to_string();
+        *text = trimmed;
     }
-    .into_any()
+    group_words(pieces).into_iter().map(render_group).collect()
 }
 
-/// Whether `inline` is (or ends with) whitespace, so a following chip needs no
-/// extra leading pad of its own.
-fn prev_ends_with_ws(inline: &Inline) -> bool {
-    match inline {
-        Inline::Text(t) => t.ends_with(' '),
-        Inline::SoftBreak | Inline::HardBreak => true,
-        Inline::Bold(c)
-        | Inline::Italic(c)
-        | Inline::Strikethrough(c)
-        | Inline::Underline(c)
-        | Inline::Subscript(c)
-        | Inline::Superscript(c) => c.last().map_or(true, prev_ends_with_ws),
-        Inline::Link { text, .. } => text.last().map_or(false, prev_ends_with_ws),
-        _ => false,
+/// Converts a text piece into a styled [`MixedTextContent`] run.
+fn text_content(text: String, color: Color, style: TextStyle, link: Option<String>) -> MixedTextContent {
+    let content = if style.strikethrough { strike_text(&text) } else { text };
+    let mut c = MixedTextContent::new(content)
+        .color(color)
+        .weight(if style.bold { Weight::Bold } else { Weight::Normal })
+        .decoration(if style.underline { TextDecoration::Underline } else { TextDecoration::None });
+    if style.italic {
+        c = c.italic();
     }
+    if let Some(url) = link {
+        c = c.hyperlink(url);
+    }
+    c
 }
 
-/// Punctuation that should hug a preceding inline code chip (no trailing pad).
-fn next_starts_with_punct(next: &[Inline]) -> bool {
-    matches!(next.first(), Some(Inline::Text(t)) if t.starts_with([',', '.', ';', ':', '!', '?', ')', ']', '}']))
-}
-
-fn render_inlines_recursive(
-    inlines: &[Inline],
-    color: Color,
-    style: TextStyle,
-    file_path: Option<&PathBuf>,
-    viewport_height: Option<u32>,
-    viewport_width: Option<u32>,
-    out: &mut Vec<AnyElement<'static>>,
-    pending_space: &mut bool,
-) {
-    // Per-position count of leading chars already absorbed by the previous
-    // inline (e.g. a footnote marker consuming the comma that follows it), so
-    // punctuation never becomes its own flex item that can wrap to a line start.
-    let mut consumed = vec![0usize; inlines.len()];
-    for (idx, inline) in inlines.iter().enumerate() {
-        match inline {
-            Inline::Text(t) => {
-                let t = &t[consumed[idx]..];
-                // Fold a pending soft-break space into this run so wrapping
-                // happens between real words, never before a leading space.
-                let content = if *pending_space {
-                    format!(" {t}")
-                } else {
-                    t.to_string()
-                };
-                *pending_space = false;
-                out.push(styled_span(color, style, content));
-            }
-            Inline::Bold(ch) => {
-                render_inlines_recursive(
-                    ch,
-                    color,
-                    TextStyle {
-                        bold: true,
-                        ..style
-                    },
-                    file_path,
-                    viewport_height,
-                    viewport_width,
-                    out,
-                    pending_space,
-                );
-            }
-            Inline::Italic(ch) => {
-                render_inlines_recursive(
-                    ch,
-                    color,
-                    TextStyle {
-                        italic: true,
-                        ..style
-                    },
-                    file_path,
-                    viewport_height,
-                    viewport_width,
-                    out,
-                    pending_space,
-                );
-            }
-            Inline::Strikethrough(ch) => {
-                render_inlines_recursive(
-                    ch,
-                    color,
-                    TextStyle {
-                        strikethrough: true,
-                        ..style
-                    },
-                    file_path,
-                    viewport_height,
-                    viewport_width,
-                    out,
-                    pending_space,
-                );
-            }
-            Inline::Underline(ch) => {
-                render_inlines_recursive(
-                    ch,
-                    color,
-                    TextStyle {
-                        underline: true,
-                        ..style
-                    },
-                    file_path,
-                    viewport_height,
-                    viewport_width,
-                    out,
-                    pending_space,
-                );
-            }
-            Inline::Subscript(ch) => {
-                let content = if *pending_space {
-                    format!(" {}", scripts_to_unicode(&inlines_to_text(ch), false))
-                } else {
-                    scripts_to_unicode(&inlines_to_text(ch), false)
-                };
-                *pending_space = false;
-                out.push(styled_span(color, style, content));
-            }
-            Inline::Superscript(ch) => {
-                let content = if *pending_space {
-                    format!(" {}", scripts_to_unicode(&inlines_to_text(ch), true))
-                } else {
-                    scripts_to_unicode(&inlines_to_text(ch), true)
-                };
-                *pending_space = false;
-                out.push(styled_span(color, style, content));
-            }
-            Inline::Code(c) => {
-                // Context-aware padding: the chip carries its own padding
-                // spaces, but drop the trailing one when punctuation follows
-                // (`code`, not "code ,") and the leading one when the chip
-                // opens the run or follows whitespace.
-                let lead = idx > 0 && !prev_ends_with_ws(&inlines[idx - 1]) && !*pending_space;
-                let trail = !next_starts_with_punct(&inlines[idx + 1..]);
-                let content = format!(
-                    "{}{}{}",
-                    if lead { " " } else { "" },
-                    c,
-                    if trail { " " } else { "" }
-                );
-                let margin = if *pending_space { 1 } else { 0 };
-                *pending_space = false;
-                out.push(
-                    element! {
-                        View(background_color: theme::status_bg(), margin_left: margin) {
-                            Text(content: content, color: theme::green())
-                        }
-                    }
-                    .into_any(),
-                );
-            }
-            Inline::Link { text, url } => {
-                // Glow-style: link text styled distinctly (blue + underline);
-                // no `(url)` suffix. Links with no visible label fall back to
-                // the URL itself so `[...](target)` never disappears entirely.
-                if inlines_to_text(text).trim().is_empty() {
-                    let content = if style.strikethrough {
-                        strike_text(url)
-                    } else if *pending_space {
-                        format!(" {url}")
-                    } else {
-                        url.clone()
-                    };
-                    *pending_space = false;
-                    out.push(
-                        element! {
-                            Text(
-                                content: content,
-                                color: theme::blue(),
-                                weight: if style.bold { Weight::Bold } else { Weight::Normal },
-                                italic: style.italic,
-                                decoration: TextDecoration::Underline,
-                            )
-                        }
-                        .into_any(),
-                    );
-                } else {
-                    render_inlines_recursive(
-                        text,
-                        theme::blue(),
-                        TextStyle {
-                            underline: true,
-                            ..style
-                        },
-                        file_path,
-                        viewport_height,
-                        viewport_width,
-                        out,
-                        pending_space,
-                    );
-                }
-            }
-            Inline::SoftBreak => {
-                // Defer the space to the next inline so it never becomes a
-                // standalone flex item that can wrap to a line start.
-                *pending_space = true;
-            }
-            Inline::HardBreak => {
-                // A zero-width `Text("\n")` never forces a flex wrap (it measures
-                // width 0), so hard breaks collapse onto the current line. Span
-                // the full container width instead so the next inline wraps.
-                *pending_space = false;
-                out.push(element! { View(width: 100pct) {} }.into_any());
-            }
-            Inline::FootnoteRef(label) => {
-                // Numeric labels render as Unicode superscripts (e.g. `text¹`);
-                // anything else keeps the readable `[^label]` form in dim color.
-                let content = if !label.is_empty() && label.chars().all(|c| c.is_ascii_digit()) {
-                    scripts_to_unicode(label, true)
-                } else {
-                    format!("[^{}]", label)
-                };
-                // Absorb any punctuation that immediately follows so it stays
-                // attached to the marker instead of wrapping to a line start
-                // (e.g. "one[^note]," — the comma must never sit alone).
-                let mut extra = String::new();
-                if let Some(Inline::Text(t)) = inlines.get(idx + 1) {
-                    for ch in t[consumed[idx + 1]..].chars() {
-                        if matches!(ch, ',' | '.' | ';' | ':' | '!' | '?' | ')' | ']' | '}') {
-                            extra.push(ch);
-                            consumed[idx + 1] += ch.len_utf8();
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                let margin = if *pending_space { 1 } else { 0 };
-                *pending_space = false;
-                out.push(
-                    element! { Text(content: format!("{}{}{}", " ".repeat(margin as usize), content, extra), color: theme::comment()) }
-                        .into_any(),
-                );
-            }
-            Inline::Math(m) => {
-                let margin = if *pending_space { 1 } else { 0 };
-                *pending_space = false;
-                if math_mode() == MathMode::Image {
-                    let vp = viewport_height.map(|h| Viewport {
-                        height: Some(h),
-                        width: viewport_width,
-                        scroll_offset: None,
-                    });
-                    out.push(
-                        element! {
-                            View(margin_left: margin) {
-                                KittyMath(content: m.clone(), display: false, viewport: vp)
-                            }
-                        }
-                        .into_any(),
-                    );
-                } else {
-                    out.push(
-                        element! {
-                            View(margin_left: margin) {
-                                UnicodeMath(content: m.clone(), display: false)
-                            }
-                        }
-                        .into_any(),
-                    );
-                }
-            }
-            Inline::Image { alt: _, url } => {
-                // For inline images, we use KittyImage directly without block margins
-                let margin = *pending_space;
-                *pending_space = false;
-                let vp = viewport_height.map(|h| Viewport {
-                    height: Some(h),
-                    width: viewport_width,
-                    scroll_offset: None,
-                });
-                out.push(element! {
-                    View(margin_left: if margin { 1 } else { 0 }) {
-                        KittyImage(url: url.clone(), file_path: file_path.cloned().unwrap_or_default(), viewport: vp)
-                    }
-                }.into_any());
+/// Renders one word group as a single flex item.
+///
+/// Text-only groups (the common case, e.g. `**bold**,`) become one
+/// [`MixedText`] node; groups containing a code chip or math use a
+/// non-wrapping row so the pieces stay together.
+fn render_group(group: Vec<Piece>) -> AnyElement<'static> {
+    if group.iter().all(|p| matches!(p, Piece::Text { .. })) {
+        let contents: Vec<MixedTextContent> = group
+            .into_iter()
+            .filter_map(|p| match p {
+                Piece::Text { text, color, style, link } => Some(text_content(text, color, style, link)),
+                _ => None,
+            })
+            .collect();
+        return element! { MixedText(contents: contents, wrap: TextWrap::NoWrap) }.into_any();
+    }
+    if group.len() == 1 {
+        return render_piece(group.into_iter().next().unwrap());
+    }
+    // A chip directly followed by punctuation drops its trailing pad so it
+    // reads `code,` rather than `code ,`.
+    let mut pieces: Vec<Piece> = group;
+    for i in 0..pieces.len().saturating_sub(1) {
+        let next_is_punct = matches!(&pieces[i + 1], Piece::Text { text, .. }
+            if text.starts_with([',', '.', ';', ':', '!', '?', ')', ']', '}', '\'', '"']));
+        if next_is_punct {
+            if let Piece::Code(c) = &mut pieces[i] {
+                c.push('\u{0}');
             }
         }
     }
+    element! {
+        View(flex_direction: FlexDirection::Row, flex_shrink: 0.0) {
+            #(pieces.into_iter().map(render_piece))
+        }
+    }
+    .into_any()
 }
 
 #[cfg(test)]

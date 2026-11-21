@@ -103,6 +103,12 @@ fn is_markdown_or_asset(name: &str) -> bool {
         || lower.ends_with(".webp")
 }
 
+/// Whether a file name is a Markdown document the viewer renders.
+pub fn is_markdown_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".mdx")
+}
+
 /// Recursively renders the tree into HTML for the sidebar.
 pub fn render_sidebar_html(node: &TreeNode, current_active: &str, is_root: bool) -> String {
     let mut html = String::new();
@@ -113,14 +119,18 @@ pub fn render_sidebar_html(node: &TreeNode, current_active: &str, is_root: bool)
         return html;
     }
 
+    use crate::server::html::icon;
     if node.is_dir {
-        let is_open = current_active.starts_with(&node.rel_path);
+        let is_open = !current_active.is_empty()
+            && (current_active == node.rel_path || current_active.starts_with(&format!("{}/", node.rel_path)));
         let open_attr = if is_open { " open" } else { "" };
         html.push_str(&format!(
             r#"<details class="tree-folder"{open_attr}>
-<summary class="tree-folder-title"><span class="folder-icon">📁</span> <span class="folder-name">{}</span></summary>
-<div class="tree-folder-children">
+<summary class="tree-row tree-folder-title">{}{}<span class="name">{}</span></summary>
+<div class="tree-children">
 "#,
+            icon("chevron"),
+            icon("folder"),
             escape_html(&node.name)
         ));
         for child in &node.children {
@@ -128,23 +138,27 @@ pub fn render_sidebar_html(node: &TreeNode, current_active: &str, is_root: bool)
         }
         html.push_str("</div></details>\n");
     } else {
-        let is_md = node.name.to_lowercase().ends_with(".md")
-            || node.name.to_lowercase().ends_with(".markdown");
+        let is_md = is_markdown_name(&node.name);
         let is_active = node.rel_path == current_active;
-        let active_cls = if is_active { " active" } else { "" };
-        let icon = if is_md { "📄" } else { "🖼️" };
+        let mut cls = String::from("tree-row tree-file");
+        if is_active {
+            cls.push_str(" active");
+        }
+        if !is_md {
+            cls.push_str(" muted");
+        }
         let link = if is_md {
             format!("/view/{}", url_encode_path(&node.rel_path))
         } else {
             format!("/raw/{}", url_encode_path(&node.rel_path))
         };
+        let target = if is_md { "" } else { r#" target="_blank" rel="noopener""# };
         html.push_str(&format!(
-            r#"<a href="{link}" class="tree-file{active_cls}" data-name="{}" title="{}">
-<span class="file-icon">{icon}</span> <span class="file-name">{}</span>
-</a>
+            r#"<a href="{link}" class="{cls}" data-path="{}" title="{}"{target}>{}<span class="name">{}</span></a>
 "#,
-            escape_html(&node.name),
             escape_html(&node.rel_path),
+            escape_html(&node.rel_path),
+            if is_md { icon("file") } else { icon("image") },
             escape_html(&node.name)
         ));
     }
@@ -159,7 +173,8 @@ pub fn render_markdown_to_html(markdown: &str, current_file_rel: &str) -> String
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_MATH
-        | Options::ENABLE_HEADING_ATTRIBUTES;
+        | Options::ENABLE_HEADING_ATTRIBUTES
+        | Options::ENABLE_GFM;
 
     let parser = Parser::new_ext(markdown, options);
 

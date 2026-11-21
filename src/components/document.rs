@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use iocraft::prelude::*;
 
 use crate::components::blocks_renderer::BlocksRenderer;
-use crate::components::cursor_info::CursorInfo;
 use crate::components::editor::{Buffer, EditorState, Mode, handle_key};
-use crate::components::file_tree::{FileNode, FileTreePanel};
+use crate::components::help::HelpOverlay;
+use crate::components::file_tree::{FileNode, FileTreePanel, tree_rows};
 use crate::components::scroll::{
     ScrollDelta, ScrollIntent, Viewport, intent_from_key, scroll_delta,
 };
@@ -45,10 +45,21 @@ pub struct DocumentProps {
     pub on_quit: Handler<()>,
     /// Callback fired when a file is selected in the sidebar file tree.
     pub on_open_file: Option<Handler<PathBuf>>,
+    /// Transient app-level notice for the status line: `(ok, text)`.
+    pub notice: Option<(bool, String)>,
+    /// Number of images/diagrams/formulas still rendering in the background.
+    pub pending_graphics: usize,
 }
 
 /// Width of the file tree side panel, when open.
-const TREE_WIDTH: u32 = 30;
+const TREE_WIDTH: u32 = 32;
+/// Maximum width of the text column. Long lines are hard to track: the
+/// column is capped and centered on wide terminals (code, tables and
+/// diagrams use the same column so everything shares one left edge).
+const MAX_COLUMN: u32 = 96;
+/// Minimum blank columns on each side of the text column (the left side also
+/// hosts the edit marker).
+const MIN_SIDE: u32 = 3;
 
 /// Top-level document component combining the editor, block renderer, and status bar.
 ///
@@ -80,6 +91,8 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         .map(|s| s.cmd_buf.clone())
         .unwrap_or_default();
     let cursor_row_col = state_guard.as_ref().and_then(|s| Some((s.row, s.col)));
+    let is_modified = state_guard.as_ref().map(|s| s.modified).unwrap_or(false);
+    let line_count = state_guard.as_ref().map(|s| s.buf.line_count()).unwrap_or(1);
     let cursor_line_preview = state_guard.as_ref().and_then(|s| {
         let (row, col) = (s.row, s.col);
         let line = s.buf.line(row);
@@ -164,18 +177,24 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         }
     });
     let mut tree_selected = hooks.use_state(|| 0usize);
+    // Keyboard reference overlay (F1 / `:help`).
+    let show_help = hooks.use_state(|| false);
+    // Search filter string typed with `/` while tree is open.
+    let tree_search = hooks.use_state(|| String::new());
+    // Whether the tree is in search-input mode (after pressing `/`).
+    let tree_searching = hooks.use_state(|| false);
     let on_open_file = props.on_open_file.clone();
 
     // Flattened visible rows for rendering + selection math (recomputed each
     // frame; cheap relative to parsing/rendering).
+    // Workspace search results are cached per query: walking the disk on
+    // every repaint would make typing in the filter sluggish.
+    let search_cache = hooks.use_ref(|| (String::new(), Vec::<FileNode>::new()));
+    let search_query = tree_search.read().clone();
     let visible_tree: Vec<FileNode> = if show_tree.get() {
         let guard = tree_root.read();
         match guard.as_ref() {
-            Some(root) => {
-                let mut refs = Vec::new();
-                FileNode::visible_nodes(root, &mut refs);
-                refs.into_iter().cloned().collect()
-            }
+            Some(root) => cached_tree_rows(root, &search_query, search_cache.clone()),
             None => Vec::new(),
         }
     } else {
@@ -239,6 +258,10 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
         let mut show_tree = show_tree.clone();
         let mut tree_root = tree_root.clone();
         let mut tree_selected = tree_selected.clone();
+        let mut tree_search = tree_search.clone();
+        let mut tree_searching = tree_searching.clone();
+        let mut show_help = show_help.clone();
+        let search_cache = search_cache.clone();
         let on_open_file = on_open_file.clone();
         // Tree root = the workspace or directory rivas was launched from.
         let tree_base_dir = props
@@ -261,6 +284,21 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
             }
 
             let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+
+            // ── Help overlay ───────────────────────────────────────────────
+            // While open it swallows every key; Esc / q / F1 / Enter close it.
+            if show_help.get() {
+                if matches!(code, KeyCode::Esc | KeyCode::F(1) | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('?')) {
+                    show_help.set(false);
+                    tick.set(tick.get().wrapping_add(1));
+                }
+                return;
+            }
+            if code == KeyCode::F(1) {
+                show_help.set(true);
+                tick.set(tick.get().wrapping_add(1));
+                return;
+            }
 
             // ── File tree sidebar ──────────────────────────────────────────
             // `\` toggles the panel (Normal/Visual only). While open, the
@@ -289,10 +327,39 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 return;
             }
             if show_tree.get() {
-                // Only tree-specific keys are captured here; everything else
-                // (j/k scrolling, [/] scaling, ...) falls through to the
-                // normal handling below so the document stays usable while
-                // the panel is open.
+                // ── Search mode: type characters to filter ─────────────────
+                if tree_searching.get() {
+                    match code {
+                        KeyCode::Esc => {
+                            tree_searching.set(false);
+                            tree_search.set(String::new());
+                            tick.set(tick.get().wrapping_add(1));
+                        }
+                        KeyCode::Enter => {
+                            tree_searching.set(false);
+                            tick.set(tick.get().wrapping_add(1));
+                        }
+                        KeyCode::Backspace => {
+                            let mut s = tree_search.read().clone();
+                            s.pop();
+                            tree_search.set(s);
+                            tree_selected.set(0);
+                            tick.set(tick.get().wrapping_add(1));
+                        }
+                        KeyCode::Char(c) => {
+                            let mut s = tree_search.read().clone();
+                            s.push(c);
+                            tree_search.set(s);
+                            tree_selected.set(0);
+                            tick.set(tick.get().wrapping_add(1));
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
+                // Tree-specific keys captured here; everything else falls
+                // through to normal document handling.
                 let handled = matches!(
                     code,
                     KeyCode::Up
@@ -301,24 +368,27 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         | KeyCode::Right
                         | KeyCode::Enter
                         | KeyCode::Char('q')
+                        | KeyCode::Char('j')
+                        | KeyCode::Char('k')
+                        | KeyCode::Char('h')
                         | KeyCode::Char('l')
+                        | KeyCode::Char('/')
+                        | KeyCode::Esc
                 );
                 if !handled {
                     // fall through
                 } else {
                     // Freshly recompute the visible rows so selection/expansion
                     // always operate on the current tree, not a stale snapshot.
+                    let search_q = tree_search.read().clone();
                     let visible: Vec<(PathBuf, bool, bool)> = {
                         // (path, is_dir, expanded)
                         let guard = tree_root.read();
                         match guard.as_ref() {
-                            Some(root) => {
-                                let mut refs = Vec::new();
-                                FileNode::visible_nodes(root, &mut refs);
-                                refs.into_iter()
-                                    .map(|n| (n.path.clone(), n.is_dir, n.expanded))
-                                    .collect()
-                            }
+                            Some(root) => cached_tree_rows(root, &search_q, search_cache.clone())
+                                .into_iter()
+                                .map(|n| (n.path, n.is_dir, n.expanded))
+                                .collect(),
                             None => Vec::new(),
                         }
                     };
@@ -332,14 +402,13 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         }
                     };
                     match code {
-                        KeyCode::Up => {
+                        KeyCode::Up | KeyCode::Char('k') => {
                             tree_selected.set(tree_selected.get().saturating_sub(1).min(max));
                         }
-                        KeyCode::Down => {
+                        KeyCode::Down | KeyCode::Char('j') => {
                             tree_selected.set((tree_selected.get() + 1).min(max));
                         }
-                        // Enter toggles any directory (expand or collapse) and
-                        // opens files; Right/l only expand; Left only collapses.
+                        // Enter: toggle dirs, open files.
                         KeyCode::Enter => {
                             if let Some(node) = visible.get(tree_selected.get()).cloned() {
                                 if node.1 {
@@ -349,22 +418,29 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                                 }
                             }
                         }
+                        // Right / l: expand only.
                         KeyCode::Right | KeyCode::Char('l') => {
                             let collapsible = visible
                                 .get(tree_selected.get())
                                 .map_or(false, |(_, is_dir, expanded)| *is_dir && !*expanded);
                             if collapsible {
                                 toggle_selected();
+                            } else if let Some((path, false, _)) = visible.get(tree_selected.get()) {
+                                // Open the file on `l` / Right too.
+                                if let Some(handler) = &on_open_file {
+                                    handler(path.clone());
+                                }
                             }
                         }
-                        KeyCode::Left => {
+                        // Left / h: collapse expanded dir, or jump to parent.
+                        KeyCode::Left | KeyCode::Char('h') => {
                             let expanded_dir = visible
                                 .get(tree_selected.get())
                                 .map_or(false, |(_, is_dir, expanded)| *is_dir && *expanded);
                             if expanded_dir {
                                 toggle_selected();
                             } else {
-                                // netrw-style: collapse and jump to parent dir.
+                                // netrw-style: jump to parent dir.
                                 if let Some((path, _, _)) = visible.get(tree_selected.get()) {
                                     if let Some(parent) = path.parent() {
                                         for (i, node) in visible.iter().enumerate() {
@@ -377,9 +453,25 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                                 }
                             }
                         }
+                        // `/` starts search mode.
+                        KeyCode::Char('/') => {
+                            tree_searching.set(true);
+                            tree_search.set(String::new());
+                            tree_selected.set(0);
+                        }
+                        // `Esc` clears search if active, otherwise closes tree.
+                        KeyCode::Esc => {
+                            if !tree_search.read().is_empty() {
+                                tree_search.set(String::new());
+                                tree_selected.set(0);
+                            } else {
+                                show_tree.set(false);
+                            }
+                        }
                         KeyCode::Char('q') => {
                             show_tree.set(false);
-                            tick.set(tick.get().wrapping_add(1));
+                            tree_search.set(String::new());
+                            tree_searching.set(false);
                         }
                         _ => {}
                     }
@@ -408,6 +500,11 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 if s.needs_rerender {
                     rerender = true;
                     s.needs_rerender = false;
+                }
+                if s.help_requested {
+                    s.help_requested = false;
+                    show_help.set(true);
+                    rerender = true;
                 }
 
                 // Update global cursor offset
@@ -510,7 +607,47 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
     // When the sidebar is open the content viewport narrows by its width so
     // text wrapping and graphics sizing adapt to the remaining columns.
     let tree_open = show_tree.get();
-    let content_vw = vw.map(|w| w.saturating_sub(if tree_open { TREE_WIDTH + 1 } else { 0 }));
+    let pane_w = vw
+        .unwrap_or(100)
+        .saturating_sub(if tree_open { TREE_WIDTH } else { 0 });
+    // Text column: capped and centered; the scrollbar takes the last column.
+    let usable = pane_w.saturating_sub(1);
+    let col_w = usable.saturating_sub(2 * MIN_SIDE).min(MAX_COLUMN).max(16);
+    let side = usable.saturating_sub(col_w);
+    let pad_left = side / 2;
+    let pad_right = side - pad_left;
+    // Downstream components derive their usable width as
+    // `viewport.width - CONTENT_H_INSET`; hand them exactly the column.
+    let column_vw = Some(col_w + theme::CONTENT_H_INSET);
+    let content_vh = vh.map(|h| h.saturating_sub(1));
+    // Current file for highlighting in the tree.
+    let current_file_for_tree = props.file_path.clone();
+    let tree_search_text = tree_search.read().clone();
+    let tree_is_searching = tree_searching.get();
+
+    // ── Status line ──────────────────────────────────────────────────────
+    let display_name = display_path(&props.file_path, props.base_dir.as_deref());
+    let (row, col) = cursor_row_col.unwrap_or((0, 0));
+    let percent = if line_count <= 1 { 100 } else { (row * 100) / (line_count - 1) };
+    let position = format!("{}:{}", row + 1, col + 1);
+    let message: Option<(Color, String)> = if current_mode == Mode::Command {
+        None
+    } else if let Some((ok, text)) = props.notice.clone() {
+        Some((if ok { theme::green() } else { theme::red() }, text))
+    } else if !current_msg.is_empty() {
+        let is_err = current_msg.starts_with("E") && current_msg.contains(':');
+        Some((if is_err { theme::red() } else { theme::muted() }, current_msg.clone()))
+    } else {
+        None
+    };
+    let _ = &cursor_line_preview;
+    let pending = props.pending_graphics;
+    let mode_color = current_mode.color();
+    let command_line = match current_mode {
+        Mode::Command => Some(format!(":{}", current_cmd)),
+        Mode::Search { .. } => Some(current_cmd.clone()),
+        _ => None,
+    };
 
     element! {
     View(width: vw.unwrap_or(100), height: vh.unwrap_or(100), flex_direction: FlexDirection::Column, background_color: theme::bg()) {
@@ -521,23 +658,27 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                         visible: visible_tree,
                         selected: tree_selected.get(),
                         width: TREE_WIDTH,
+                        current_file: Some(current_file_for_tree.clone()),
+                        search_query: tree_search_text.clone(),
+                        is_searching: tree_is_searching,
+                        height: content_vh.unwrap_or(24),
                     )
                 }
                 .into_any()
             }))
-            View(flex_grow: 1.0, border_style: BorderStyle::Single, border_color: theme::border()){
+            View(flex_grow: 1.0) {
                 ScrollView(
                     handle: Some(scroll_handle),
                     keyboard_scroll: Some(false),
-                    scrollbar_thumb_color: Some(theme::fg()),
-                    scrollbar_track_color: Some(theme::dark_bg()),
+                    scrollbar_thumb_color: Some(theme::dark_grey()),
+                    scrollbar_track_color: Some(theme::bg()),
                 ) {
-                    View(flex_direction: FlexDirection::Column, padding_left: 2, padding_right: 2, padding_top: 1, padding_bottom: 1) {
+                    View(width: 100pct, flex_direction: FlexDirection::Column, padding_left: pad_left, padding_right: pad_right, padding_top: 1, padding_bottom: 2) {
                     BlocksRenderer(
                         blocks: doc.blocks,
                         content: current_content,
                         file_path: file_path,
-                        viewport: Some(Viewport::new(vh, content_vw, Some(scroll_handle.read().scroll_offset()))),
+                        viewport: Some(Viewport::new(content_vh, column_vw, Some(scroll_handle.read().scroll_offset()))),
                         cursor_offset: props.cursor_offset.clone(),
                         editor_state: Some(editor_state.clone()),
                         scroll_handle: Some(scroll_handle.clone()),
@@ -548,50 +689,97 @@ pub fn Document(props: &DocumentProps, mut hooks: Hooks) -> impl Into<AnyElement
                 }
             }
         }
-            View(width: 100pct, height: 1, background_color: theme::status_bg(), flex_direction: FlexDirection::Row) {
-                View(background_color: current_mode.color(), padding_left: 1, padding_right: 1) {
-                    Text(content: format!(" {} ", current_mode.label()), color: theme::dark_bg(), weight: Weight::Bold)
-                }
-                View(flex_grow: 1.0, padding_left: 1) {
-                    #(if current_mode == Mode::Command {
-                        Some(element! {
-                            Text(content: format!(":{}", current_cmd), color: theme::fg())
-                        })
-                    } else if let Mode::Search { .. } = current_mode {
-                        Some(element! {
-                            Text(content: current_cmd.clone(), color: theme::fg())
-                        })
-                    } else {
-                        Some(element! {
-                            Text(content: current_msg.clone(), color: theme::fg())
-                        })
-                    }.into_iter())
-                }
-                #(if let Some((row, col)) = cursor_row_col {
-                    if !matches!(current_mode, Mode::Command | Mode::Search { .. }) {
-                        let (before_win, cursor_ch, after_win) = cursor_line_preview
-                            .unwrap_or_default();
-                        let total = vw.unwrap_or(80).saturating_sub(theme::TOTAL_VIEWPORT_OFFSET + 12) as usize;
-                        Some(element! {
-                            View(padding_right: 1) {
-                                CursorInfo(
-                                    row: row,
-                                    col: col,
-                                    before: before_win,
-                                    cursor_char: cursor_ch,
-                                    after: after_win,
-                                    prefix_color: Some(theme::comment()),
-                                    budget: Some(total),
-                                )
-                            }
-                        })
-                    } else {
-                        None
+        // Single status line: mode · file · message ……… progress · position · help
+        View(width: 100pct, height: 1, background_color: theme::status_bg(), flex_direction: FlexDirection::Row) {
+            View(background_color: mode_color, padding_left: 1, padding_right: 1) {
+                Text(content: current_mode.label(), color: theme::dark_bg(), weight: Weight::Bold)
+            }
+            #(if let Some(cmd) = command_line {
+                // Command / search entry owns the line, with a visible caret.
+                Some(element! {
+                    View(flex_grow: 1.0, padding_left: 1, flex_direction: FlexDirection::Row) {
+                        Text(content: cmd, color: theme::fg(), wrap: TextWrap::NoWrap)
+                        View(background_color: theme::fg(), width: 1) {
+                            Text(content: " ")
+                        }
                     }
-                } else {
-                    None
-                }.into_iter())
+                }.into_any())
+            } else {
+                Some(element! {
+                    View(flex_grow: 1.0, flex_direction: FlexDirection::Row, overflow: Overflow::Hidden) {
+                        View(padding_left: 1, flex_shrink: 0.0) {
+                            Text(content: display_name.clone(), color: theme::fg(), wrap: TextWrap::NoWrap)
+                        }
+                        #(is_modified.then(|| element! {
+                            View(padding_left: 1, flex_shrink: 0.0) {
+                                Text(content: "●", color: theme::orange())
+                            }
+                        }.into_any()))
+                        #(message.clone().map(|(color, text)| element! {
+                            View(padding_left: 2, flex_shrink: 1.0, overflow: Overflow::Hidden) {
+                                Text(content: text, color: color, wrap: TextWrap::NoWrap)
+                            }
+                        }.into_any()))
+                    }
+                }.into_any())
+            })
+            #((pending > 0).then(|| element! {
+                View(padding_right: 2, flex_shrink: 0.0) {
+                    Text(content: format!("◌ rendering {pending}"), color: theme::blue())
+                }
+            }.into_any()))
+            View(padding_right: 2, flex_shrink: 0.0) {
+                Text(content: format!("{position}  {percent}%"), color: theme::muted(), wrap: TextWrap::NoWrap)
+            }
+            View(padding_right: 1, flex_shrink: 0.0, flex_direction: FlexDirection::Row) {
+                Text(content: "F1", color: theme::fg(), weight: Weight::Bold)
+                Text(content: " help", color: theme::comment())
             }
         }
+        #(show_help.get().then(|| element! {
+            HelpOverlay(width: vw.unwrap_or(100), height: vh.unwrap_or(30))
+        }.into_any()))
+    }
+    }
+}
+
+/// [`tree_rows`] with the workspace-search result memoized per query.
+fn cached_tree_rows(
+    root: &FileNode,
+    query: &str,
+    mut cache: Ref<(String, Vec<FileNode>)>,
+) -> Vec<FileNode> {
+    if query.is_empty() {
+        return tree_rows(root, "");
+    }
+    if cache.read().0 == query {
+        return cache.read().1.clone();
+    }
+    let rows = tree_rows(root, query);
+    cache.set((query.to_string(), rows.clone()));
+    rows
+}
+
+/// The file name shown in the status line: relative to the workspace (or the
+/// current directory), falling back to a `~`-shortened absolute path.
+fn display_path(file: &std::path::Path, base: Option<&std::path::Path>) -> String {
+    let full = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    let candidates = base
+        .filter(|b| !b.as_os_str().is_empty())
+        .map(|b| b.to_path_buf())
+        .into_iter()
+        .chain(std::env::current_dir().ok());
+    for dir in candidates {
+        let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+        if let Ok(rel) = full.strip_prefix(&dir) {
+            if !rel.as_os_str().is_empty() {
+                return rel.display().to_string();
+            }
+        }
+    }
+    let text = full.display().to_string();
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && text.starts_with(&home) => format!("~{}", &text[home.len()..]),
+        _ => text,
     }
 }

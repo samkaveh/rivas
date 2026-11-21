@@ -1,3 +1,4 @@
+use crate::components::code_block::CodeBlock;
 use crate::components::kitty_graphic::{KittyGraphic, UseKittyGraphic};
 use crate::components::raw_buffer::{RawBuffer, RawState};
 use crate::components::scroll::Viewport;
@@ -35,7 +36,7 @@ pub fn MermaidBlock(props: &MermaidBlockProps, _hooks: Hooks) -> impl Into<AnyEl
     // already prints the source), so show the source editor alone.
     if raw.is_some() && !capabilities::has_kitty() {
         return element! {
-            View(flex_direction: FlexDirection::Column, margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(flex_direction: FlexDirection::Column, background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw.unwrap(), color: theme::fg())
             }
         }
@@ -62,11 +63,11 @@ pub fn MermaidBlock(props: &MermaidBlockProps, _hooks: Hooks) -> impl Into<AnyEl
         };
 
         return element! {
-            View(flex_direction: if beside { FlexDirection::Row } else { FlexDirection::Column }, margin_bottom: 1) {
+            View(flex_direction: if beside { FlexDirection::Row } else { FlexDirection::Column }) {
                 View() {
                     KittyMermaid(source: props.source.clone(), viewport: diagram_viewport)
                 }
-                View(margin_bottom: 1, background_color: theme::dark_bg()) {
+                View(background_color: theme::dark_bg()) {
                     RawBuffer(raw: raw, color: theme::fg())
                 }
             }
@@ -75,19 +76,16 @@ pub fn MermaidBlock(props: &MermaidBlockProps, _hooks: Hooks) -> impl Into<AnyEl
     }
 
     element! {
-       View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
+       View(flex_direction: FlexDirection::Column) {
            #(if capabilities::has_kitty() {
                 Some(element! {
                     KittyMermaid(source: props.source.clone(), viewport: props.viewport.clone())
                 }.into_any())
            } else {
+               // No graphics protocol: show the diagram source as a
+               // labelled code panel, consistent with other code blocks.
                Some(element! {
-                   View(flex_direction: FlexDirection::Column, margin_bottom: 1) {
-                       Text(content: "[Mermaid diagram]".to_string(), color: theme::comment())
-                       #(props.source.lines().map(|line| element! {
-                           Text(content: line.to_string(), color: theme::fg())
-                       }).collect::<Vec<_>>())
-                   }
+                   CodeBlock(language: Some("mermaid".to_string()), code: props.source.clone())
                }.into_any())
            })
        }

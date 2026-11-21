@@ -190,22 +190,49 @@ impl Viewport {
         self.width.unwrap_or(80)
     }
 }
-/// Estimate the height of a block in terminal rows.
+/// Vertical space (in rows) inserted *after* `block` when it is followed by
+/// `next`. This is the single source of truth for the document's vertical
+/// rhythm: block components never set their own outer margins, the renderer
+/// wraps each block with this gap, and the virtual-scroll estimator adds the
+/// very same value — so spacers and real layout always agree.
+///
+/// * The last block in a container gets no trailing gap (quotes, list items
+///   and the document end stay tight).
+/// * `tight` containers (list items) stack their blocks with no gap.
+/// * Section headings (`#`, `##`) get two rows above them so sections read as
+///   groups: more space above a heading than below it.
+pub fn block_gap(next: Option<&Block>, tight: bool) -> u32 {
+    match next {
+        None => 0,
+        Some(_) if tight => 0,
+        Some(Block::Heading { level, .. }) if *level <= 2 => 2,
+        Some(_) => 1,
+    }
+}
+
+/// Rows a heading occupies: its text plus, for `#`/`##`, the rule beneath.
+pub fn heading_rows(level: u8) -> u32 {
+    if level <= 2 { 2 } else { 1 }
+}
+
+/// Estimate the height of a block's own content in terminal rows (excluding
+/// the inter-block gap, see [`block_gap`]).
 pub fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u32 {
     // Content width matches what the rendered Paragraph actually wraps at
-    // (viewport minus border + padding), so virtual-scroll spacers don't
+    // (viewport minus the content inset), so virtual-scroll spacers don't
     // underestimate real heights in narrow windows.
     let wrap_width = vw
         .unwrap_or(80)
         .saturating_sub(theme::CONTENT_H_INSET)
         .max(1) as usize;
     match block {
-        Block::Heading { .. } => 2,
+        Block::Heading { level, .. } => heading_rows(*level),
         Block::Paragraph { content, .. } => {
             let text = inlines_to_text(content);
             wrapped_rows(&text, wrap_width).max(1)
         }
-        Block::Code { code, .. } => code.lines().count() as u32 + 2,
+        // Header row (language label) + code lines + bottom padding row.
+        Block::Code { code, .. } => code.lines().count().max(1) as u32 + 2,
         Block::Math { display, .. } => {
             let cache_key = format!("math:{}:{}:{}", vw.unwrap_or(100), display, content);
             IMAGE_HEIGHT_CACHE
@@ -220,12 +247,13 @@ pub fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u
                 .map(|(_, h)| h)
                 .unwrap_or(10)
         }
-        Block::Table { rows, .. } => (rows.len() + 1) as u32,
+        // Top border + header + separator + rows + bottom border.
+        Block::Table { rows, .. } => rows.len() as u32 + 4,
         Block::List { items, .. } => items
             .iter()
             .map(|item| {
-                // Each item wraps its inner blocks next to the marker column,
-                // so estimate from the item's children (min one row each).
+                // Items stack tightly; each item's blocks sit next to the
+                // marker column with no gaps between them.
                 item.content
                     .iter()
                     .map(|b| estimate_block_height(b, content, vw))
@@ -234,11 +262,9 @@ pub fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u
             })
             .sum::<u32>()
             .max(items.len() as u32),
-        Block::Quote { children, .. } | Block::FootnoteDefinition { children, .. } => children
-            .iter()
-            .map(|b| estimate_block_height(b, content, vw))
-            .sum::<u32>()
-            .max(1),
+        Block::Quote { children, .. } | Block::FootnoteDefinition { children, .. } => {
+            estimate_blocks_height(children, content, vw, false).max(1)
+        }
         Block::ThematicBreak { .. } => 1,
         Block::Image { url, .. } => {
             let cache_key = format!("{}:{}", vw.unwrap_or(100), url);
@@ -257,10 +283,20 @@ pub fn estimate_block_height(block: &Block, content: &str, vw: Option<u32>) -> u
     }
 }
 
+/// Total estimated height of a sequence of blocks, including the gaps the
+/// renderer places between them.
+pub fn estimate_blocks_height(blocks: &[Block], content: &str, vw: Option<u32>, tight: bool) -> u32 {
+    blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| estimate_block_height(b, content, vw) + block_gap(blocks.get(i + 1), tight))
+        .sum()
+}
+
 /// Build cumulative block heights and byte start offsets for virtual scrolling.
 /// Returns `(cumulative_heights, start_offsets)` where `cumulative_heights[i]`
-/// is the total height of blocks `0..i`, and `start_offsets[i]` is the byte
-/// offset of block `i` in the source content.
+/// is the total height of blocks `0..i` (each including its trailing gap), and
+/// `start_offsets[i]` is the byte offset of block `i` in the source content.
 pub fn build_cumulative_heights(
     blocks: &[Block],
     content: &str,
@@ -270,9 +306,9 @@ pub fn build_cumulative_heights(
     let mut starts = Vec::with_capacity(blocks.len());
     let mut total = 0u32;
     cumulative.push(0);
-    for block in blocks {
+    for (i, block) in blocks.iter().enumerate() {
         starts.push(block.span().0);
-        total += estimate_block_height(block, content, vw);
+        total += estimate_block_height(block, content, vw) + block_gap(blocks.get(i + 1), false);
         cumulative.push(total);
     }
     (cumulative, starts)

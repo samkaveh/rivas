@@ -305,6 +305,25 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
     let cursor_offset = hooks.use_ref(|| 0usize);
     // Feedback for file-open actions (success or failure) shown in the bar.
     let status_msg = hooks.use_state(|| None::<(bool, String)>);
+    // Notices are transient: clear each one a few seconds after it appears.
+    let notice_text = status_msg.read().as_ref().map(|(_, t)| t.clone());
+    hooks.use_future({
+        let mut status_msg = status_msg.clone();
+        async move {
+            loop {
+                smol::Timer::after(std::time::Duration::from_millis(250)).await;
+                let current = status_msg.read().as_ref().map(|(_, t)| t.clone());
+                if current.is_some() {
+                    let seen = current.clone();
+                    smol::Timer::after(std::time::Duration::from_millis(3000)).await;
+                    if status_msg.read().as_ref().map(|(_, t)| t.clone()) == seen {
+                        status_msg.set(None);
+                    }
+                }
+            }
+        }
+    });
+    let _ = notice_text;
     // Tick counter used to drive re-renders while graphics are loading.
     // The future polls pending_graphics_count() every 100 ms and bumps the
     // counter whenever rendering is in progress so the status badge updates.
@@ -320,6 +339,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
 
     hooks.use_terminal_events({
         let mut should_exit = should_exit;
+        let mut status_msg = status_msg.clone();
         let action = props.action.clone();
         move |event| match event {
             TerminalEvent::Key(KeyEvent {
@@ -334,6 +354,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                     should_exit.set(true);
                 } else if ctrl && code == KeyCode::Char('t') {
                     theme::cycle();
+                    status_msg.set(Some((true, format!("Theme: {}", theme::current().name))));
                 }
             }
             _ => {}
@@ -414,6 +435,10 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
         })
     };
 
+    // `render_tick` is read so the status line re-renders while graphics load.
+    let _t = render_tick.get();
+    let pending_graphics = graphics_manager::pending_graphics_count();
+
     element! {
         View(flex_direction: FlexDirection::Column, width, height) {
             Document(
@@ -421,7 +446,7 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 file_path: path,
                 base_dir: Some(props.base_dir.clone()),
                 initial_show_tree: Some(props.initial_show_tree),
-                viewport_height: height.saturating_sub(1) as u32,
+                viewport_height: height as u32,
                 viewport_width: width as u32,
                 keyboard_navigation: Some(true),
                 follow_ref: None,
@@ -431,67 +456,9 @@ fn App<'a>(props: &AppProps<'a>, mut hooks: Hooks) -> impl Into<AnyElement<'stat
                 on_change,
                 on_quit,
                 on_open_file,
+                notice: status_msg.read().clone(),
+                pending_graphics,
             )
-            View(width: 100pct, height: 1, background_color: theme::status_bg(), flex_direction: FlexDirection::Row) {
-                #(if let Some((ok, msg)) = status_msg.read().clone() {
-                    // While a feedback message is active it takes over the bar
-                    // so long paths are never clipped by the hint chips.
-                    Some(element! {
-                        View(background_color: if ok { theme::green() } else { theme::red() }) {
-                            Text(content: format!(" {msg} "), color: theme::dark_bg(), weight: Weight::Bold)
-                        }
-                    }.into_any())
-                } else {
-                    Some(element! {
-                        View(flex_direction: FlexDirection::Row) {
-                            View(background_color: theme::dark_grey()) {
-                                Text(content: " :q ", color: theme::fg())
-                            }
-                            Text(content: " Quit ")
-                            View(background_color: theme::dark_grey()) {
-                                Text(content: " C-p ", color: theme::fg())
-                            }
-                            Text(content: " Find ")
-                            View(background_color: theme::dark_grey()) {
-                                Text(content: " j/k ", color: theme::fg())
-                            }
-                            Text(content: " Scroll ")
-                            View(background_color: theme::dark_grey()) {
-                                Text(content: " gg/G ", color: theme::fg())
-                            }
-                            Text(content: " Top/Bottom ")
-                            View(background_color: theme::dark_grey()) {
-                                Text(content: " :math ", color: theme::fg())
-                            }
-                            Text(content: " Math ")
-                            View(background_color: theme::dark_grey()) {
-                                Text(content: " C-t ", color: theme::fg())
-                            }
-                            Text(content: format!(" Theme ({}) ", theme::current().name))
-                            View(background_color: theme::dark_grey()) {
-                                Text(content: " \\ ", color: theme::fg())
-                            }
-                            Text(content: " Files ")
-                        }
-                    }.into_any())
-                }.into_iter())
-                View(flex_grow: 1.0) {}
-                #({
-                    // `render_tick` is read here so iocraft re-renders the
-                    // status bar on every tick while graphics are loading.
-                    let _t = render_tick.get();
-                    let count = graphics_manager::pending_graphics_count();
-                    if count > 0 {
-                        Some(element! {
-                            View(background_color: theme::blue(), margin_right: 1, padding_left: 1, padding_right: 1) {
-                                Text(content: format!(" ⟳ Rendering ({count}) "), color: theme::dark_bg(), weight: Weight::Bold)
-                            }
-                        }.into_any())
-                    } else {
-                        None
-                    }
-                }.into_iter())
-            }
         }
     }
 }

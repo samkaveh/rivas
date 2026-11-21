@@ -37,7 +37,7 @@ pub fn TableBlock(props: &TableBlockProps, mut hooks: Hooks) -> impl Into<AnyEle
     if let Some(mut raw) = props.raw.clone() {
         raw.highlight = Some(highlighted);
         return element! {
-            View(margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw, color: theme::fg())
             }
         }
@@ -47,7 +47,7 @@ pub fn TableBlock(props: &TableBlockProps, mut hooks: Hooks) -> impl Into<AnyEle
     let ncols = props.headers.len();
     if ncols == 0 {
         return element! {
-            View(margin_bottom: 1) {
+            View() {
                 Text(content: "Empty table".to_string(), color: theme::comment())
             }
         }
@@ -112,14 +112,12 @@ pub fn TableBlock(props: &TableBlockProps, mut hooks: Hooks) -> impl Into<AnyEle
     element! {
         View(
             flex_direction: FlexDirection::Column,
-            margin_bottom: 1,
-            border_style: BorderStyle::Single,
+            border_style: BorderStyle::Round,
             border_color: theme::border(),
-            background_color: theme::bg(),
             width: table_width,
         ) {
             // Header Row
-            View(flex_direction: FlexDirection::Row, border_style: BorderStyle::Single, border_edges: Edges::Bottom, border_color: theme::border()) {
+            View(flex_direction: FlexDirection::Row, border_style: BorderStyle::Single, border_edges: Edges::Bottom, border_color: theme::border(), background_color: theme::surface()) {
                 #(props.headers.iter().enumerate().map(|(i, cell)| {
                     let alignment = props.alignments.get(i).cloned().unwrap_or(Alignment::None);
                     let justify = match alignment {
@@ -130,7 +128,7 @@ pub fn TableBlock(props: &TableBlockProps, mut hooks: Hooks) -> impl Into<AnyEle
                     element! {
                         View(width: col_widths[i], justify_content: justify, padding_left: 1, padding_right: 1) {
                             View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
-                                #(render_inlines(&cell.content, theme::cyan(), true, Some(&props.file_path), props.viewport.as_ref().and_then(|v| v.height), props.viewport.as_ref().and_then(|v| v.width)))
+                                #(render_inlines(&cell.content, theme::fg(), true, Some(&props.file_path), props.viewport.as_ref().and_then(|v| v.height), props.viewport.as_ref().and_then(|v| v.width)))
                             }
                         }
                     }.into_any()

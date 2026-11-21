@@ -36,7 +36,7 @@ pub fn FootnoteBlock(
     if let Some(mut raw) = props.raw.clone() {
         raw.highlight = Some(highlighted);
         return element! {
-            View(margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw, color: theme::fg())
             }
         }
@@ -48,7 +48,7 @@ pub fn FootnoteBlock(
     let marker_width = (props.label.chars().count() + 5).max(6) as u32;
 
     element! {
-        View(flex_direction: FlexDirection::Row, margin_bottom: 1) {
+        View(flex_direction: FlexDirection::Row) {
             View(width: marker_width) {
                 Text(content: format!("[^{}] ", props.label), color: theme::comment())
             }

@@ -148,6 +148,43 @@ pub fn run_server(
     Ok(())
 }
 
+/// Joins a URL-supplied relative path onto the workspace root, refusing
+/// anything that could escape it: absolute paths (`Path::join` with an
+/// absolute path *replaces* the root), `..`, and drive prefixes. Symlinks are
+/// resolved and must still point inside the root.
+fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut out = root.to_path_buf();
+    for comp in Path::new(rel).components() {
+        match comp {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    match fs::canonicalize(&out) {
+        Ok(real) => {
+            let root_real = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            real.starts_with(&root_real).then_some(out)
+        }
+        // Not existing yet: the lexical check above is sufficient.
+        Err(_) => Some(out),
+    }
+}
+
+/// Display name of the workspace (its folder name).
+fn workspace_name(root: &Path) -> String {
+    root.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string())
+}
+
+/// Whether an HTTP `Host` header names this machine's loopback interface.
+fn is_loopback_host(host: &str) -> bool {
+    let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    matches!(name, "localhost" | "127.0.0.1" | "[::1]")
+}
+
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() > max_len {
         format!("...{}", &s[s.len().saturating_sub(max_len - 3)..])
@@ -245,6 +282,122 @@ fn handle_connection(
     let method = parts[0];
     let full_path = parts[1];
 
+    // ── Live-preview endpoint ──────────────────────────────────────────────
+    // POST /api/render/<rel-path> — renders the request body as Markdown
+    // (relative links resolved against <rel-path>) without touching disk.
+    if method == "POST" {
+        let mut headers = HashMap::<String, String>::new();
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some((k, v)) = line.trim().split_once(':') {
+                headers.insert(k.trim().to_lowercase(), v.trim().to_string());
+            }
+        }
+        let rel = full_path
+            .split('?')
+            .next()
+            .map(url_decode)
+            .and_then(|p| p.strip_prefix("/api/render/").map(str::to_string));
+        let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let allowed = headers.contains_key("x-rivas-render")
+            && headers.get("host").is_some_and(|h| is_loopback_host(h));
+        match rel {
+            Some(rel) if allowed && len <= 32 * 1024 * 1024 => {
+                let mut body = vec![0u8; len];
+                reader.read_exact(&mut body)?;
+                let html = render_markdown_to_html(&String::from_utf8_lossy(&body), &rel);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\r\n",
+                    html.len()
+                );
+                stream.write_all(header.as_bytes())?;
+                stream.write_all(html.as_bytes())?;
+            }
+            _ => {
+                let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nForbidden");
+            }
+        }
+        return Ok(());
+    }
+
+    // ── Save endpoint ──────────────────────────────────────────────────────
+    // PUT /api/save/<rel-path> — writes the request body back to an existing
+    // Markdown file in the workspace and broadcasts a reload to SSE clients.
+    //
+    // This endpoint writes to disk, so it only accepts same-origin requests
+    // from the rivas page itself: no CORS headers are ever sent (a
+    // cross-origin preflight fails), the request must carry the custom
+    // `X-Rivas-Save` header (which forces a preflight for any cross-origin
+    // caller), any `Origin` must be this server, and the `Host` must be a
+    // loopback name (defeats DNS rebinding).
+    if method == "PUT" {
+        let mut headers = HashMap::<String, String>::new();
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some((k, v)) = line.trim().split_once(':') {
+                headers.insert(k.trim().to_lowercase(), v.trim().to_string());
+            }
+        }
+        let rel = full_path
+            .split('?')
+            .next()
+            .map(url_decode)
+            .and_then(|p| p.strip_prefix("/api/save/").map(str::to_string));
+        let host_ok = headers
+            .get("host")
+            .map(|h| is_loopback_host(h))
+            .unwrap_or(false);
+        let origin_ok = match headers.get("origin") {
+            None => true,
+            Some(o) => headers.get("host").is_some_and(|h| {
+                o == &format!("http://{h}") && is_loopback_host(h)
+            }),
+        };
+        let marked = headers.contains_key("x-rivas-save");
+        let target = rel.as_deref().and_then(|r| safe_join(root_dir, r));
+        let writable = target.as_ref().is_some_and(|p| {
+            p.is_file() && renderer::is_markdown_name(&p.to_string_lossy())
+        });
+        if rel.is_none() {
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found");
+            return Ok(());
+        }
+        if !(host_ok && origin_ok && marked && writable) {
+            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nForbidden");
+            return Ok(());
+        }
+        let content_length: usize = headers
+            .get("content-length")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        // Markdown documents are small; refuse absurd bodies outright.
+        if content_length > 32 * 1024 * 1024 {
+            let _ = stream.write_all(b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n");
+            return Ok(());
+        }
+        let mut body = vec![0u8; content_length];
+        reader.read_exact(&mut body)?;
+        fs::write(target.as_ref().unwrap(), &body)?;
+        {
+            let mut subs = sse_subscribers.lock().unwrap();
+            let mut retain = Vec::new();
+            for mut s in subs.drain(..) {
+                if s.write_all(b"data: reload\n\n").is_ok() && s.flush().is_ok() {
+                    retain.push(s);
+                }
+            }
+            *subs = retain;
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok")?;
+        return Ok(());
+    }
+
     if method != "GET" && method != "HEAD" {
         let response = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n";
         let _ = stream.write_all(response.as_bytes());
@@ -265,7 +418,7 @@ fn handle_connection(
     // Routing
     if decoded_path == "/api/events" {
         // SSE connection
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
         stream.write_all(header.as_bytes())?;
         stream.write_all(b": connected\n\n")?;
         stream.flush()?;
@@ -278,7 +431,7 @@ fn handle_connection(
         let tree = build_tree(root_dir, root_dir);
         let json = serde_json::to_string(&tree)?;
         let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             json.len(),
             json
         );
@@ -303,7 +456,10 @@ fn handle_connection(
     }
 
     if let Some(rel) = decoded_path.strip_prefix("/view/") {
-        let file_path = root_dir.join(rel);
+        let Some(file_path) = safe_join(root_dir, rel) else {
+            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nForbidden");
+            return Ok(());
+        };
         if file_path.is_dir() {
             if let Some(readme) = find_default_markdown(&file_path) {
                 let rrel = readme.strip_prefix(root_dir).unwrap_or(&readme);
@@ -327,14 +483,20 @@ fn handle_connection(
     }
 
     if let Some(rel) = decoded_path.strip_prefix("/raw/") {
-        let file_path = root_dir.join(rel);
-        return serve_static_file(&mut stream, &file_path);
+        return match safe_join(root_dir, rel) {
+            Some(file_path) => serve_static_file(&mut stream, &file_path),
+            None => {
+                let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nForbidden");
+                Ok(())
+            }
+        };
     }
 
     // Fallback: check if path directly exists under root
-    let direct_path = root_dir.join(decoded_path.trim_start_matches('/'));
-    if direct_path.is_file() {
-        return serve_static_file(&mut stream, &direct_path);
+    if let Some(direct_path) = safe_join(root_dir, decoded_path.trim_start_matches('/')) {
+        if direct_path.is_file() {
+            return serve_static_file(&mut stream, &direct_path);
+        }
     }
 
     let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
@@ -364,6 +526,7 @@ fn serve_markdown_page(
 
     let page_html = html::build_page_html(
         &title,
+        &workspace_name(root_dir),
         rel_path,
         &sidebar_html,
         &content_html,
@@ -385,7 +548,7 @@ fn serve_directory_dashboard(
     root_dir: &Path,
     rel_dir: &str,
 ) -> Result<()> {
-    let target_dir = root_dir.join(rel_dir);
+    let target_dir = safe_join(root_dir, rel_dir).unwrap_or_else(|| root_dir.to_path_buf());
     let tree = build_tree(root_dir, root_dir);
     let sidebar_html = tree
         .as_ref()
@@ -412,23 +575,25 @@ fn serve_directory_dashboard(
             let item_rel = path.strip_prefix(root_dir).unwrap_or(&path);
             let item_rel_str = item_rel.to_string_lossy();
             let is_md = name.ends_with(".md") || name.ends_with(".markdown");
-            let icon = if is_dir { "📁" } else if is_md { "📄" } else { "📎" };
+            let icon = if is_dir {
+                html::icon("folder")
+            } else if is_md {
+                html::icon("file")
+            } else {
+                html::icon("image")
+            };
             let link = if is_dir || is_md {
                 format!("/view/{}", renderer::url_encode_path(&item_rel_str))
             } else {
                 format!("/raw/{}", renderer::url_encode_path(&item_rel_str))
             };
+            let detail = if is_dir { "Folder".to_string() } else { item_rel_str.to_string() };
             cards_html.push_str(&format!(
-                r#"<a href="{link}" class="dir-card">
-<div class="dir-card-icon">{icon}</div>
-<div class="dir-card-info">
-    <div class="dir-card-name">{}</div>
-    <div class="dir-card-path">{}</div>
-</div>
-</a>
+                r#"<a href="{link}" class="dir-card{}"><span class="ico">{icon}</span><span class="meta"><span class="name">{}</span><span class="path">{}</span></span></a>
 "#,
+                if is_dir { " is-dir" } else { "" },
                 renderer::escape_html(&name),
-                renderer::escape_html(&item_rel_str)
+                renderer::escape_html(&detail)
             ));
         }
     }
@@ -443,14 +608,9 @@ fn serve_directory_dashboard(
     };
 
     let content_html = format!(
-        r#"<div class="dir-dashboard">
-    <div class="dir-header">
-        <h1 class="dir-title">📁 {}</h1>
-        <p class="dir-subtitle">Browse documents and folders in this workspace.</p>
-    </div>
-    <div class="dir-grid">
-        {}
-    </div>
+        r#"<div class="dir-head"><h1>{}</h1><p>No README here — pick a document to open.</p></div>
+<div class="dir-grid">
+{}
 </div>"#,
         renderer::escape_html(&folder_name),
         cards_html
@@ -458,6 +618,7 @@ fn serve_directory_dashboard(
 
     let page_html = html::build_page_html(
         &folder_name,
+        &workspace_name(root_dir),
         rel_dir,
         &sidebar_html,
         &content_html,
@@ -615,3 +776,27 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn safe_join_rejects_escapes() {
+        let root = std::env::temp_dir();
+        assert!(safe_join(&root, "/etc/passwd").is_none(), "absolute path must not replace root");
+        assert!(safe_join(&root, "../etc/passwd").is_none());
+        assert!(safe_join(&root, "a/../../b").is_none());
+        assert_eq!(safe_join(&root, "docs/a.md"), Some(root.join("docs/a.md")));
+        assert_eq!(safe_join(&root, "./a.md"), Some(root.join("a.md")));
+    }
+
+    #[test]
+    fn loopback_hosts() {
+        assert!(is_loopback_host("localhost:3000"));
+        assert!(is_loopback_host("127.0.0.1:8080"));
+        assert!(is_loopback_host("[::1]:3000"));
+        assert!(!is_loopback_host("evil.example:3000"));
+        assert!(!is_loopback_host("localhost.evil.example"));
+    }
+}

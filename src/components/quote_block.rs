@@ -20,7 +20,23 @@ pub struct QuoteBlockProps {
     pub raw: Option<RawState>,
 }
 
-/// Renders a blockquote with a `▎` left-border accent and dark background.
+/// A left-edge-only border drawn with `▎`, used for block quotes so the bar
+/// spans the full height of the quote (however many lines it wraps to).
+pub fn quote_bar() -> BorderStyle {
+    BorderStyle::Custom(BorderCharacters {
+        top_left: ' ',
+        top_right: ' ',
+        bottom_left: ' ',
+        bottom_right: ' ',
+        left: '▎',
+        right: ' ',
+        top: ' ',
+        bottom: ' ',
+    })
+}
+
+/// Renders a blockquote: a full-height accent bar and the quoted blocks set
+/// in a softer color, with no background box (quotes recede; code advances).
 #[component]
 pub fn QuoteBlock(props: &QuoteBlockProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let file_path = props.file_path.clone().unwrap_or_default();
@@ -29,25 +45,24 @@ pub fn QuoteBlock(props: &QuoteBlockProps, mut hooks: Hooks) -> impl Into<AnyEle
     if let Some(mut raw) = props.raw.clone() {
         raw.highlight = Some(highlighted);
         return element! {
-            View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 1, margin_bottom: 1, background_color: theme::dark_bg()) {
-                View() {
-                    Text(content: " ▎ ".to_string(), color: theme::teal())
-                }
-                View(flex_grow: 1.0) {
-                    RawBuffer(raw: raw, color: theme::fg())
-                }
+            View(background_color: theme::dark_bg()) {
+                RawBuffer(raw: raw, color: theme::fg())
             }
         };
     }
     element! {
-        View(flex_direction: FlexDirection::Row, padding_left: 2, padding_right: 1, margin_bottom: 1, background_color: theme::dark_bg()) {
-            View() {
-                Text(content: " ▎ ".to_string(), color: theme::teal())
-            }
+        View(
+            flex_direction: FlexDirection::Column,
+            border_style: quote_bar(),
+            border_edges: Edges::Left,
+            border_color: theme::dark_grey(),
+            padding_left: 2,
+        ) {
             BlocksRenderer(
                 blocks: props.children.clone(),
                 file_path: file_path,
                 viewport: props.viewport.clone(),
+                muted: true,
             )
         }
     }

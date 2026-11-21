@@ -18,6 +18,8 @@ pub struct ParagraphProps {
     pub viewport: Option<Viewport>,
     /// Optional raw buffer + cursor for the Normal-mode source view.
     pub raw: Option<RawState>,
+    /// Text color override (defaults to the body text color).
+    pub color: Option<Color>,
 }
 
 /// Renders a paragraph of inline Markdown content.
@@ -29,7 +31,7 @@ pub fn Paragraph(props: &ParagraphProps, mut hooks: Hooks) -> impl Into<AnyEleme
     let element = if let Some(mut raw) = props.raw.clone() {
         raw.highlight = Some(highlighted);
         element! {
-            View(margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw, color: theme::fg())
             }
         }
@@ -37,7 +39,7 @@ pub fn Paragraph(props: &ParagraphProps, mut hooks: Hooks) -> impl Into<AnyEleme
     } else {
         let styled_elements = render_inlines(
             &props.content,
-            theme::fg(),
+            props.color.unwrap_or_else(theme::fg),
             false,
             props.file_path.as_ref(),
             props.viewport.as_ref().and_then(|v| v.height),
@@ -45,7 +47,7 @@ pub fn Paragraph(props: &ParagraphProps, mut hooks: Hooks) -> impl Into<AnyEleme
         );
 
         element! {
-            View(margin_bottom: 1, flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
+            View(flex_direction: FlexDirection::Row, flex_wrap: FlexWrap::Wrap) {
                 #(styled_elements)
             }
         }

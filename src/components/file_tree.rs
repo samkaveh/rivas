@@ -86,6 +86,50 @@ impl FileNode {
     }
 }
 
+/// The rows the tree panel shows, shared by rendering and key handling so
+/// selection indices always refer to the same list.
+///
+/// With an empty `query` this is the expanded tree. With a query it is a flat
+/// list of files anywhere under the root whose path contains the query
+/// (case-insensitive) — including files inside collapsed folders — with
+/// Markdown files first and shorter paths before longer ones.
+pub fn tree_rows(root: &FileNode, query: &str) -> Vec<FileNode> {
+    if query.is_empty() {
+        let mut refs = Vec::new();
+        FileNode::visible_nodes(root, &mut refs);
+        return refs.into_iter().cloned().collect();
+    }
+    let q = query.to_lowercase();
+    let mut hits: Vec<FileNode> = Vec::new();
+    collect_matches(&root.path, &root.path, &q, 0, &mut hits);
+    hits.sort_by_key(|n| (!is_markdown(&n.name), n.name.len(), n.name.to_lowercase()));
+    hits.truncate(200);
+    hits
+}
+
+fn collect_matches(root: &Path, dir: &Path, q: &str, depth: usize, out: &mut Vec<FileNode>) {
+    if depth > 12 || out.len() >= 2000 {
+        return;
+    }
+    let Some(children) = read_dir_sorted(dir) else {
+        return;
+    };
+    for child in children {
+        if child.is_dir {
+            collect_matches(root, &child.path, q, depth + 1, out);
+        } else {
+            let rel = child
+                .path
+                .strip_prefix(root)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| child.name.clone());
+            if rel.to_lowercase().contains(q) {
+                out.push(FileNode { name: rel, ..child });
+            }
+        }
+    }
+}
+
 /// Lists `dir` sorted directories-first then alphabetically, skipping hidden
 /// entries and common build/VCS noise.
 fn read_dir_sorted(dir: &Path) -> Option<Vec<FileNode>> {
@@ -143,50 +187,148 @@ pub struct FileTreePanelProps {
     pub selected: usize,
     /// Panel width in columns.
     pub width: u32,
+    /// Path of the currently open file (highlighted differently from cursor).
+    pub current_file: Option<std::path::PathBuf>,
+    /// Current search filter string.
+    pub search_query: String,
+    /// Whether the tree is in search-input mode.
+    pub is_searching: bool,
+    /// Panel height in rows (used to keep the selection scrolled into view).
+    pub height: u32,
 }
 
 /// Collapsible left-side file explorer: folder tree with ▸/▾ indicators and a
 /// highlighted selected row.
 #[component]
 pub fn FileTreePanel(props: &FileTreePanelProps) -> impl Into<AnyElement<'static>> {
+    use unicode_width::UnicodeWidthStr;
+
+    // Rows available for the list: total minus header (2) and footer (2).
+    let list_rows = props.height.saturating_sub(4).max(1) as usize;
+    let total = props.visible.len();
+    // Keep the selection inside the window, scrolling as little as needed and
+    // keeping a few rows of context below it.
+    let first = if total <= list_rows {
+        0
+    } else {
+        let margin = 3.min(list_rows / 3);
+        let ideal_bottom = (props.selected + margin + 1).min(total);
+        ideal_bottom.saturating_sub(list_rows).min(props.selected.saturating_sub(margin))
+    };
+    let last = (first + list_rows).min(total);
+    // Inner width: panel minus right divider and left padding.
+    let inner = props.width.saturating_sub(2) as usize;
+
+    let root_name = props.visible.first().map(|n| n.name.clone()).unwrap_or_default();
+    let footer: Vec<(String, String)> = if props.is_searching {
+        vec![("esc".into(), "cancel".into()), ("↵".into(), "done".into())]
+    } else if !props.search_query.is_empty() {
+        vec![("esc".into(), "clear".into()), ("↵".into(), "open".into()), ("\\".into(), "hide".into())]
+    } else {
+        vec![("↵".into(), "open".into()), ("/".into(), "filter".into()), ("\\".into(), "hide".into())]
+    };
+
     element! {
         View(
             width: props.width,
             height: 100pct,
             flex_direction: FlexDirection::Column,
             border_style: BorderStyle::Single,
+            border_edges: Edges::Right,
             border_color: theme::border(),
             background_color: theme::dark_bg(),
         ) {
-            View(background_color: theme::status_bg(), padding_left: 1) {
-                Text(content: " Files ", color: theme::fg(), weight: Weight::Bold)
+            // Header: workspace name, or the live filter while searching.
+            View(height: 2, padding_left: 2, flex_direction: FlexDirection::Column) {
+                #(if props.is_searching || !props.search_query.is_empty() {
+                    element! {
+                        View(flex_direction: FlexDirection::Row) {
+                            Text(content: "/ ", color: theme::yellow(), weight: Weight::Bold)
+                            Text(content: props.search_query.clone(), color: theme::fg())
+                            #(props.is_searching.then(|| element! {
+                                View(background_color: theme::yellow(), width: 1) { Text(content: " ") }
+                            }.into_any()))
+                        }
+                    }.into_any()
+                } else {
+                    element! {
+                        Text(content: root_name.to_uppercase(), color: theme::muted(), weight: Weight::Bold, wrap: TextWrap::NoWrap)
+                    }.into_any()
+                })
             }
             View(flex_grow: 1.0, flex_direction: FlexDirection::Column) {
-                #(props.visible.iter().enumerate().map(|(i, node)| {
+                #(props.visible.iter().enumerate().skip(first).take(last - first).map(|(i, node)| {
                     let selected = i == props.selected;
-                    let indent = "  ".repeat(depth_of(&props.visible, i));
+                    let is_current = props.current_file.as_ref()
+                        .map_or(false, |cf| *cf == node.path);
+                    let depth = if props.search_query.is_empty() { depth_of(&props.visible, i) } else { 0 };
+                    let indent = "  ".repeat(depth);
                     let icon = if node.is_dir {
                         if node.expanded { "▾ " } else { "▸ " }
-                    } else {
+                    } else if props.search_query.is_empty() {
                         "  "
+                    } else {
+                        ""
+                    };
+                    let is_text = !node.is_dir && is_markdown(&node.name);
+                    let color = if is_current {
+                        theme::blue()
+                    } else if node.is_dir || is_text {
+                        theme::fg()
+                    } else {
+                        theme::comment()
+                    };
+                    // Truncate long names with an ellipsis instead of wrapping.
+                    let budget = inner.saturating_sub(indent.len() + 2 + 1);
+                    let name = if node.name.width() > budget && budget > 1 {
+                        let mut out = String::new();
+                        for ch in node.name.chars() {
+                            if out.width() + 2 > budget { break; }
+                            out.push(ch);
+                        }
+                        out.push('…');
+                        out
+                    } else {
+                        node.name.clone()
                     };
                     element! {
-                        View(height: 1, background_color: selected.then_some(theme::status_bg())) {
+                        View(height: 1, flex_direction: FlexDirection::Row, background_color: selected.then(theme::surface)) {
+                            Text(content: if selected { "▌" } else { " " }, color: theme::blue())
+                            Text(content: format!(" {indent}"))
+                            Text(content: icon, color: theme::muted())
                             Text(
-                                content: format!("{indent}{icon}{}", node.name),
-                                color: if node.is_dir { theme::blue() } else { theme::fg() },
-                                weight: if selected || node.is_dir { Weight::Bold } else { Weight::Normal },
+                                content: name,
+                                color: color,
+                                weight: if node.is_dir || is_current { Weight::Bold } else { Weight::Normal },
+                                wrap: TextWrap::NoWrap,
                             )
                         }
                     }.into_any()
                 }))
+                #((total == 0 && !props.search_query.is_empty()).then(|| element! {
+                    View(padding_left: 2) {
+                        Text(content: "No matching files", color: theme::comment(), italic: true)
+                    }
+                }.into_any()))
             }
-            View(height: 1, border_style: BorderStyle::Single, border_edges: Edges::Top, border_color: theme::border(), padding_left: 1) {
-                Text(content: "↑↓ move · ↵ open · q close", color: theme::comment())
+            // Footer: the three keys that matter here.
+            View(height: 2, padding_left: 2, padding_top: 1, flex_direction: FlexDirection::Row) {
+                #(footer.into_iter().map(|(key, label)| element! {
+                    View(flex_direction: FlexDirection::Row, margin_right: 2) {
+                        Text(content: key, color: theme::fg(), weight: Weight::Bold)
+                        Text(content: format!(" {label}"), color: theme::comment())
+                    }
+                }.into_any()))
             }
         }
     }
     .into_any()
+}
+
+/// Whether a file is one rivas opens as a document.
+fn is_markdown(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".mdx") || lower.ends_with(".txt")
 }
 
 /// Depth of a visible row = number of ancestor directories above it.

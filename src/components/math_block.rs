@@ -33,14 +33,14 @@ pub fn MathBlock(props: &MathBlockProps, mut hooks: Hooks) -> impl Into<AnyEleme
     if let Some(mut raw) = props.raw.clone() {
         raw.highlight = Some(highlighted);
         element! {
-            View(margin_bottom: 1, background_color: theme::dark_bg()) {
+            View(background_color: theme::dark_bg()) {
                 RawBuffer(raw: raw, color: theme::cyan())
             }
         }
         .into_any()
     } else if math_mode() == MathMode::Image {
         element! {
-            View(margin_bottom: 1) {
+            View() {
                 KittyMath(content: props.content.clone(), display: props.display.clone(), viewport: props.viewport.clone())
             }
         }
@@ -87,7 +87,7 @@ pub fn UnicodeMath(props: &UnicodeMathProps, mut hooks: Hooks) -> impl Into<AnyE
         MathRender::Text(text) => {
             if props.display {
                 element! {
-                    View(margin_bottom: 1, margin_left: 2) {
+                    View(justify_content: JustifyContent::Center) {
                         Text(content: text, color: theme::cyan())
                     }
                 }
@@ -104,7 +104,7 @@ pub fn UnicodeMath(props: &UnicodeMathProps, mut hooks: Hooks) -> impl Into<AnyE
             let (l_open, l_mid, l_close, r_open, r_mid, r_close) = bracket_glyphs(kind);
             if props.display {
                 element! {
-                    View(margin_bottom: 1, margin_left: 2) {
+                    View(justify_content: JustifyContent::Center) {
                         MatrixMath(
                             rows: rows,
                             col_widths: col_widths,
